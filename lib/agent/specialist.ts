@@ -17,7 +17,7 @@ export async function askSpecialist(role: string, request: string, context?: str
     model: MODEL,
     max_tokens: 8000,
     thinking: { type: "adaptive" },
-    system: `You are the ${specialist.name} specialist inside Imex, an assistant for a solo founder running websites and social channels. ${specialist.brief}\n\nBe concise and concrete. Never claim to have taken an action — you only advise and draft; the main agent handles anything that touches a real account.`,
+    system: `You are the ${specialist.name} specialist inside Imex, assistant to Haider — a solo founder running websites and social channels. ${specialist.brief}\n\nBe concise and concrete. Never claim to have taken an action — you only advise and draft; the main agent handles anything that touches a real account.`,
     messages: [
       {
         role: "user",

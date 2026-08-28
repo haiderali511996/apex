@@ -123,7 +123,17 @@ function matchWake(transcript: string): string | null {
  * The single voice + chat loop shared by the orb and the chat panel, so both
  * drive the same conversation rather than keeping two rival copies of it.
  */
-export function useApexVoice(options: { speak?: boolean; wakeWord?: boolean; continuous?: boolean } = {}) {
+export function useApexVoice(options: {
+  speak?: boolean;
+  wakeWord?: boolean;
+  continuous?: boolean;
+  /**
+   * Handles commands about the interface itself ("show your face"). Return the
+   * line to say back and the request never reaches the agent — the screen
+   * changes immediately rather than after a round trip.
+   */
+  onLocalCommand?: (text: string) => string | null;
+} = {}) {
   const speakEnabled = options.speak ?? true;
   // After a reply finishes, open the mic again so a follow-up needs no tap.
   const continuous = options.continuous ?? true;
@@ -152,6 +162,9 @@ export function useApexVoice(options: { speak?: boolean; wakeWord?: boolean; con
   // send() re-opens the mic once a reply finishes, but startListening() is
   // defined in terms of send(). A ref breaks that cycle.
   const startListeningRef = useRef<() => void>(() => {});
+  // Read through a ref so a new handler doesn't rebuild the whole send loop.
+  const localCommandRef = useRef(options.onLocalCommand);
+  localCommandRef.current = options.onLocalCommand;
 
   /**
    * The reply is revealed in step with the voice rather than dumped at once.
@@ -225,8 +238,21 @@ export function useApexVoice(options: { speak?: boolean; wakeWord?: boolean; con
 
       const next = [...messagesRef.current, { role: "user" as const, content: trimmed }];
       setMessages(next);
-      setState("thinking");
       setError(null);
+
+      // Interface commands are answered here, not by the agent.
+      const localReply = localCommandRef.current?.(trimmed);
+      if (localReply) {
+        setMessages((m) => [...m, { role: "assistant", content: localReply }]);
+        setState("speaking");
+        speak(localReply, () => {
+          setState("idle");
+          if (continuousRef.current) setTimeout(() => startListeningRef.current(), 450);
+        });
+        return;
+      }
+
+      setState("thinking");
 
       // Only the request itself is guarded here. Rendering and speaking the
       // reply must not be able to masquerade as a network failure.

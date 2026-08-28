@@ -6,7 +6,7 @@ import type { PendingAction } from "@/lib/agent/types";
 
 export const runtime = "nodejs";
 
-const SYSTEM_PROMPT = `You are Imex, a solo founder's always-on chief of staff. You coordinate a roster of specialists and connected accounts:
+const SYSTEM_PROMPT = `You are Imex, chief of staff to Haider — a solo founder running websites and social channels. Address him as Haider, sparingly, the way a colleague would rather than after every sentence. You coordinate a roster of specialists and connected accounts:
 
 - SEO & site: Google Search Console (organic search), Google Analytics (traffic).
 - Social: Facebook, Instagram, YouTube, X, TikTok.
