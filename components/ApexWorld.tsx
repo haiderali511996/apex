@@ -18,7 +18,18 @@ import OrbStatusBar from "./OrbStatusBar";
 import { useApexVoice } from "@/lib/useApexVoice";
 import ApexCaptions from "./ApexCaptions";
 import VoicePicker from "./VoicePicker";
-import ImexFace from "./ImexFace";
+import ImexHologram from "./ImexHologram";
+import CameraView from "./CameraView";
+import { useCamera } from "@/lib/useCamera";
+
+/** Phrases that open, close, or look through the camera. */
+function cameraCommand(text: string): "open" | "close" | "look" | null {
+  const t = text.toLowerCase().replace(/[.,!?]/g, " ").replace(/\s+/g, " ").trim();
+  if (/\b(close|stop|turn off|shut)\b.*\b(camera|webcam|cam)\b/.test(t)) return "close";
+  if (/\b(open|start|turn on|switch on|use)\b.*\b(camera|webcam|cam)\b/.test(t)) return "open";
+  if (/\bcan you see me\b|\bdo you see me\b|\blook at me\b|\bwhat do you see\b|\bwho do you see\b/.test(t)) return "look";
+  return null;
+}
 
 /** Phrases that summon or dismiss the face, matched before the agent sees them. */
 function faceCommand(text: string): "show" | "hide" | null {
@@ -279,9 +290,44 @@ export default function ApexWorld() {
   };
   const [voicePickerOpen, setVoicePickerOpen] = useState(false);
   const [faceOpen, setFaceOpen] = useState(false);
+  const camera = useCamera();
+  const [looking, setLooking] = useState(false);
+
+  /** Opens the camera if it isn't already, grabs a frame, and looks at it. */
+  const lookThroughCamera = async (): Promise<string> => {
+    if (!camera.open) {
+      const ok = await camera.start();
+      if (!ok) return camera.error ?? "I couldn't open the camera.";
+    }
+    const frame = camera.capture();
+    if (!frame) return "The camera is on, but I couldn't get a picture from it.";
+
+    setLooking(true);
+    try {
+      const res = await fetch("/api/agent/see", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image: frame }),
+      });
+      const data = await res.json();
+      return data.reply || data.error || "I couldn't make that out.";
+    } catch {
+      return "I opened the camera but couldn't reach the server to look.";
+    } finally {
+      setLooking(false);
+    }
+  };
+
   const voice = useApexVoice({
     wakeWord,
-    onLocalCommand: (text) => {
+    onLocalCommand: async (text) => {
+      const cam = cameraCommand(text);
+      if (cam === "close") {
+        camera.stop();
+        return "Camera off.";
+      }
+      if (cam === "open" || cam === "look") return lookThroughCamera();
+
       const cmd = faceCommand(text);
       if (cmd === "show") {
         setFaceOpen(true);
@@ -552,7 +598,11 @@ export default function ApexWorld() {
 
       {/* The face sits over everything; the voice loop keeps running behind it
           so the conversation continues while it's open. */}
-      {faceOpen && <ImexFace state={voice.state} onClose={() => setFaceOpen(false)} />}
+      {faceOpen && <ImexHologram voiceState={voice.state} onClose={() => setFaceOpen(false)} />}
+
+      {camera.open && (
+        <CameraView stream={camera.stream.current} looking={looking} onClose={camera.stop} />
+      )}
     </div>
   );
 }

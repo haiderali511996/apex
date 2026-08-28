@@ -132,7 +132,7 @@ export function useApexVoice(options: {
    * line to say back and the request never reaches the agent — the screen
    * changes immediately rather than after a round trip.
    */
-  onLocalCommand?: (text: string) => string | null;
+  onLocalCommand?: (text: string) => string | null | Promise<string | null>;
 } = {}) {
   const speakEnabled = options.speak ?? true;
   // After a reply finishes, open the mic again so a follow-up needs no tap.
@@ -240,8 +240,14 @@ export function useApexVoice(options: {
       setMessages(next);
       setError(null);
 
-      // Interface commands are answered here, not by the agent.
-      const localReply = localCommandRef.current?.(trimmed);
+      // Interface commands are answered here, not by the agent. They may be
+      // async — opening the camera and looking through it takes a moment.
+      let localReply: string | null | undefined;
+      try {
+        localReply = await localCommandRef.current?.(trimmed);
+      } catch (err) {
+        localReply = err instanceof Error ? err.message : "That didn't work.";
+      }
       if (localReply) {
         setMessages((m) => [...m, { role: "assistant", content: localReply }]);
         setState("speaking");
