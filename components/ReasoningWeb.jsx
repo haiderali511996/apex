@@ -89,7 +89,7 @@ export default function ReasoningWeb({ state = 'standby', trace = null, mode = '
     // Soft glow on the connective tissue (lines/traces) so the whole web shimmers (ref look). Text
     // labels live in nodesG (unfiltered) so they stay crisp.
     // Dark mode: glow the connective tissue (the shimmer look). Light mode: NO blur — crisp thin
-    // lines read as a blueprint on paper; the glow was what made them look foggy gray (Ruben).
+    // lines read as a blueprint on paper; the glow was what made them look foggy gray (Haider).
     if (!light) [pcbG, meshG, spokesG].forEach((grp) => grp.setAttribute('filter', 'url(#rw-line)'))
     let seed = 11; const rnd = () => (seed = (seed * 9301 + 49297) % 233280) / 233280
     const pathD = (bx, by, bend) => {

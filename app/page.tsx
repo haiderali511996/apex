@@ -18,7 +18,7 @@ export default function Home() {
 
       {/* Repo link — remove or replace for your own use */}
       <a
-        href="https://github.com/RubenM1990/APEX-UI"
+        href="#"
         target="_blank"
         rel="noopener noreferrer"
         style={{

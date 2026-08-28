@@ -23,9 +23,9 @@ type Tile = { key: string; icon: typeof Sparkles; label: string; href: string };
 
 // Social links stay live — they point to public profiles. Swap them for your own.
 const TILES: Tile[] = [
-  { key: "instagram", icon: Instagram, label: "Follow us on Instagram", href: "https://www.instagram.com/reznikov_engineering/" },
-  { key: "facebook",  icon: Facebook,  label: "Follow us on Facebook",  href: "https://www.facebook.com/profile.php?id=61590746065386" },
-  { key: "linkedin",  icon: Linkedin,  label: "Follow us on LinkedIn",  href: "https://www.linkedin.com/in/ruben-mouradian-150698173" },
+  { key: "instagram", icon: Instagram, label: "Follow us on Instagram", href: "#" },
+  { key: "facebook",  icon: Facebook,  label: "Follow us on Facebook",  href: "#" },
+  { key: "linkedin",  icon: Linkedin,  label: "Follow us on LinkedIn",  href: "#" },
 ];
 
 function Clock() {

@@ -1,7 +1,7 @@
 # Credits
 
 APEX-UI builds on two excellent **MIT-licensed** community components from
-[21st.dev](https://21st.dev/community/components):
+[21st.dev](#):
 
 - **Animated shader background** — `components/ShaderBackground.jsx`
   (the WebGL "plasma waves" backdrop behind the orb).
