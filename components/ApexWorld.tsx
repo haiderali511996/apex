@@ -335,8 +335,11 @@ export default function ApexWorld() {
         background: "radial-gradient(ellipse 95% 88% at 50% 42%, #122c43 0%, #0c1d30 38%, #07111f 72%, #050b14 100%)",
       }} />
 
-      {/* background waves - the app's WebGL shader at the app's opacity */}
-      {!reduced && (
+      {/* background waves - the app's WebGL shader at the app's opacity.
+          Torn down while the face is open: it is a WebGL scene rendering every
+          frame behind a fullscreen overlay that hides it completely, and it
+          was starving the face's own animation. */}
+      {!reduced && !faceOpen && (
         <div aria-hidden="true" style={{ position: "absolute", inset: 0, zIndex: 0 }}>
           <ShaderBackground opacity={0.12} voiceActive={orbState === "speaking"} gold={false} />
         </div>
@@ -358,14 +361,16 @@ export default function ApexWorld() {
           collapses the whole graph into a single image. Rather than edit the copy,
           the graph is marked decorative here and the same onSelect path is exposed
           through the equivalent list of real buttons below. */}
-      <div aria-hidden="true" style={{ position: "absolute", inset: 0, zIndex: 2, pointerEvents: "none" }}>
-        <ReasoningWeb
-          state={webState}
-          mode="full"
-          coreless
-          onSelect={(n: NodeSel) => { openAgent(n); }}
-        />
-      </div>
+      {!faceOpen && (
+        <div aria-hidden="true" style={{ position: "absolute", inset: 0, zIndex: 2, pointerEvents: "none" }}>
+          <ReasoningWeb
+            state={webState}
+            mode="full"
+            coreless
+            onSelect={(n: NodeSel) => { openAgent(n); }}
+          />
+        </div>
+      )}
 
       {/* Keyboard and screen-reader equivalent of the agent graph. */}
       <nav className="visually-hidden" aria-label="Imex agents">
@@ -382,9 +387,11 @@ export default function ApexWorld() {
 
       {/* the core - painted ABOVE the web (app order); display-only, the tap target
           is the circular disc below so agent nodes near the ring stay clickable */}
-      <div style={{ position: "absolute", left: "50%", top: "50%", width: "min(560px, 58vw)", height: "min(500px, 56vw, 70vh)", transform: "translate(-50%, -50%)", zIndex: 3, pointerEvents: "none" }}>
-        <ApexHeroOrb state={orbState} interactive={false} />
-      </div>
+      {!faceOpen && (
+        <div style={{ position: "absolute", left: "50%", top: "50%", width: "min(560px, 58vw)", height: "min(500px, 56vw, 70vh)", transform: "translate(-50%, -50%)", zIndex: 3, pointerEvents: "none" }}>
+          <ApexHeroOrb state={orbState} interactive={false} />
+        </div>
+      )}
 
       {/* central tap disc - covers the ring only (nodes orbit outside it) */}
       <div
