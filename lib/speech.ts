@@ -44,7 +44,9 @@ export function cancelSpeech() {
 export function speakText(
   text: string,
   voice: SpeechSynthesisVoice | null,
-  handlers: SpeakHandlers = {}
+  handlers: SpeakHandlers = {},
+  // Set when this is already the no-voice retry, so it can't loop.
+  isRetry = false
 ): void {
   if (!speechAvailable()) {
     handlers.onError?.("This browser has no speech synthesis.");
@@ -105,9 +107,16 @@ export function speakText(
 
       // Nothing started and nothing errored: the synth swallowed it silently.
       setTimeout(() => {
-        if (!started && !synth.speaking && !synth.pending) {
-          handlers.onError?.("silent");
+        if (started || synth.speaking || synth.pending) return;
+
+        // Chrome will accept a speak() with a particular voice attached and
+        // then produce nothing at all. The browser's own default voice
+        // usually still works, so try that once before giving up.
+        if (voice && !isRetry) {
+          speakText(text, null, handlers, true);
+          return;
         }
+        handlers.onError?.("silent");
       }, 1200);
     } catch (err) {
       handlers.onError?.(err instanceof Error ? err.message : String(err));
