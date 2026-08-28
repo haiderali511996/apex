@@ -17,6 +17,8 @@ import { useEffect, useState } from "react";
 import { Sparkles, Instagram, Facebook, Linkedin, ArrowUpRight } from "lucide-react";
 
 const ACCENT = "#00e5ff";
+/** Who Imex is greeting. Change this if someone else runs the panel. */
+const OWNER = "Haider";
 const WCODE: Record<number, string> = { 0: "Clear", 1: "Mainly clear", 2: "Partly cloudy", 3: "Overcast", 45: "Fog", 48: "Fog", 51: "Drizzle", 53: "Drizzle", 55: "Drizzle", 61: "Rain", 63: "Rain", 65: "Heavy rain", 71: "Snow", 73: "Snow", 75: "Snow", 80: "Showers", 81: "Showers", 82: "Showers", 95: "Storm", 96: "Storm", 99: "Storm" };
 
 type Tile = { key: string; icon: typeof Sparkles; label: string; href: string };
@@ -74,8 +76,19 @@ function Clock() {
   const time = now.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
   const date = now.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
 
+  const hour = now.getHours();
+  const partOfDay = hour < 12 ? "morning" : hour < 18 ? "afternoon" : "evening";
+
   return (
-    <div style={{ display: "flex", alignItems: "flex-end", gap: 26, flexWrap: "wrap" }}>
+    <div>
+      <div style={{
+        fontFamily: "var(--font-mono)", fontSize: 10, letterSpacing: "0.28em",
+        color: `${ACCENT}cc`, textTransform: "uppercase", marginBottom: 10,
+      }}>
+        Good {partOfDay}, {OWNER}
+      </div>
+
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 26, flexWrap: "wrap" }}>
       <div>
         <div style={{ fontSize: 34, fontWeight: 300, letterSpacing: "0.04em", color: "#f0ede8", lineHeight: 1, textShadow: `0 0 22px ${ACCENT}33` }}>{time}</div>
         <div style={{ fontSize: 10.5, letterSpacing: "0.2em", color: "rgba(240,237,232,0.55)", marginTop: 4, textTransform: "uppercase" }}>{date}</div>
@@ -88,6 +101,7 @@ function Clock() {
           </div>
         </div>
       )}
+      </div>
     </div>
   );
 }

@@ -20,6 +20,30 @@
 // (3) — a module-level reference keeps the utterance alive while it speaks.
 let active: SpeechSynthesisUtterance | null = null;
 
+/**
+ * Chrome on macOS accepts an utterance with a named voice attached, reports
+ * speaking = true, and plays nothing. The browser's own default voice works
+ * fine. Once that has been seen, stop attaching voice objects for the rest of
+ * the session and steer the accent with `lang` instead, which does work.
+ */
+const NAMED_VOICE_BROKEN_KEY = "imex.namedVoiceBroken";
+
+function namedVoicesBroken(): boolean {
+  try {
+    return window.sessionStorage.getItem(NAMED_VOICE_BROKEN_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function markNamedVoicesBroken() {
+  try {
+    window.sessionStorage.setItem(NAMED_VOICE_BROKEN_KEY, "1");
+  } catch {
+    // not persisted; the per-utterance retry still covers it
+  }
+}
+
 export type SpeakHandlers = {
   onStart?: () => void;
   onBoundary?: (charIndex: number, charLength: number) => void;
@@ -64,12 +88,14 @@ export function speakText(
   setTimeout(() => {
     try {
       const utter = new SpeechSynthesisUtterance(text);
-      if (voice) {
+      // Always steer the accent with lang — that part works everywhere.
+      if (voice?.lang) utter.lang = voice.lang;
+      const attachVoice = voice && !isRetry && !namedVoicesBroken();
+      if (attachVoice) {
         try {
           utter.voice = voice;
-          utter.lang = voice.lang;
         } catch {
-          // Browser rejected the voice object; the default still speaks.
+          // Browser rejected the voice object; lang alone still speaks.
         }
       }
       utter.rate = 1;
@@ -105,19 +131,22 @@ export function speakText(
 
       synth.speak(utter);
 
-      // Nothing started and nothing errored: the synth swallowed it silently.
+      // `onstart` is the only trustworthy signal that audio began — Chrome
+      // sets speaking = true even when the named voice produces nothing, so
+      // that flag is deliberately not consulted here.
       setTimeout(() => {
-        if (started || synth.speaking || synth.pending) return;
+        if (started) return;
 
-        // Chrome will accept a speak() with a particular voice attached and
-        // then produce nothing at all. The browser's own default voice
-        // usually still works, so try that once before giving up.
-        if (voice && !isRetry) {
-          speakText(text, null, handlers, true);
+        if (attachVoice) {
+          // The named voice is the problem, not the audio path. Remember it
+          // and retry on the default, keeping the language for the accent.
+          markNamedVoicesBroken();
+          cancelSpeech();
+          speakText(text, voice, handlers, true);
           return;
         }
         handlers.onError?.("silent");
-      }, 1200);
+      }, 1400);
     } catch (err) {
       handlers.onError?.(err instanceof Error ? err.message : String(err));
     }
