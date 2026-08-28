@@ -37,6 +37,16 @@ Then `npm run build` for a production build, or deploy to Vercel in one click.
 | `ApexWorld` | Composes the above; owns the tap-state cycle and the agent overview cards |
 | `ApexOverviewPanel` | Top-left HUD: live clock, weather, and social links |
 | `app/api/weather` | Keyless [open-meteo](#) proxy for the panel's weather |
+| `app/agent` | Talking assistant: reports on SEO/social accounts, drafts posts for your approval (see [SETUP.md](./SETUP.md)) |
+
+## Talk to Apex
+
+`/agent` is a chat + voice interface backed by Claude that can pull live
+reports from Google Search Console, Facebook, Instagram, YouTube, X, and
+TikTok, and draft posts across those platforms. Every post it drafts stays
+a draft until you approve it in the UI — it never publishes on its own.
+Nothing here works until you add your own API credentials: see
+[SETUP.md](./SETUP.md) for the full walkthrough.
 
 ## Customise
 
