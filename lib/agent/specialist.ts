@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { SPECIALISTS } from "./roles";
 
-const MODEL = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-5";
+const MODEL = process.env.ANTHROPIC_MODEL || "claude-opus-5";
 
 /**
  * Runs one specialist as a focused sub-call. No tools: these roles reason over
@@ -16,7 +16,8 @@ export async function askSpecialist(role: string, request: string, context?: str
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   const response = await anthropic.messages.create({
     model: MODEL,
-    max_tokens: 1500,
+    max_tokens: 8000,
+    thinking: { type: "adaptive" },
     system: `You are the ${specialist.name} specialist inside Apex, an assistant for a solo founder running websites and social channels. ${specialist.brief}\n\nBe concise and concrete. Never claim to have taken an action — you only advise and draft; the main agent handles anything that touches a real account.`,
     messages: [
       {

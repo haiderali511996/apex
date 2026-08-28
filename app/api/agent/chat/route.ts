@@ -23,7 +23,30 @@ Keep replies conversational and tight, the way you'd say them out loud — repli
 const MAX_TOOL_ROUNDS = 8;
 
 // Override with ANTHROPIC_MODEL in .env.local to point at a different model.
-const MODEL = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-5";
+const MODEL = process.env.ANTHROPIC_MODEL || "claude-opus-5";
+
+/** Turns an SDK failure into something the user can actually act on. */
+function describeError(err: unknown): { message: string; status: number } {
+  if (err instanceof Anthropic.AuthenticationError) {
+    return { message: "Your ANTHROPIC_API_KEY was rejected. Check it's the full key from console.anthropic.com and restart the dev server.", status: 401 };
+  }
+  if (err instanceof Anthropic.NotFoundError) {
+    return { message: `The model "${MODEL}" wasn't found. Set ANTHROPIC_MODEL in .env.local to a model your account can use.`, status: 404 };
+  }
+  if (err instanceof Anthropic.RateLimitError) {
+    return { message: "Rate limited by the Claude API — wait a moment and try again.", status: 429 };
+  }
+  if (err instanceof Anthropic.BadRequestError) {
+    return { message: `The Claude API rejected the request: ${err.message}`, status: 400 };
+  }
+  if (err instanceof Anthropic.APIConnectionError) {
+    return { message: "Couldn't reach the Claude API — check your network connection.", status: 502 };
+  }
+  if (err instanceof Anthropic.APIError) {
+    return { message: `Claude API error ${err.status}: ${err.message}`, status: err.status ?? 500 };
+  }
+  return { message: err instanceof Error ? err.message : String(err), status: 500 };
+}
 
 export async function POST(req: NextRequest) {
   if (!process.env.ANTHROPIC_API_KEY) {
@@ -43,16 +66,28 @@ export async function POST(req: NextRequest) {
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   const newPendingActions: PendingAction[] = [];
 
-  let conversation: Anthropic.MessageParam[] = messages.map((m) => ({ role: m.role, content: m.content }));
+  const conversation: Anthropic.MessageParam[] = messages.map((m) => ({ role: m.role, content: m.content }));
 
+  try {
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     const response = await anthropic.messages.create({
       model: MODEL,
-      max_tokens: 2048,
+      max_tokens: 8000,
       system: SYSTEM_PROMPT,
       tools: toolDefinitions,
+      // Deciding which accounts to pull and how to read the numbers is real
+      // reasoning, so let the model think as much as the question warrants.
+      thinking: { type: "adaptive" },
       messages: conversation,
     });
+
+    // A safety decline stops the turn; say so rather than returning "(no response)".
+    if (response.stop_reason === "refusal") {
+      return NextResponse.json({
+        reply: "I can't help with that one. Try rephrasing, or ask me something else.",
+        pendingActions: newPendingActions,
+      });
+    }
 
     const toolUses = response.content.filter(
       (b): b is Anthropic.ToolUseBlock => b.type === "tool_use"
@@ -87,4 +122,9 @@ export async function POST(req: NextRequest) {
     reply: "I ran into too many tool calls in a row and stopped to avoid looping — try rephrasing or asking for one thing at a time.",
     pendingActions: newPendingActions,
   });
+  } catch (err) {
+    const { message, status } = describeError(err);
+    console.error("[agent/chat]", err);
+    return NextResponse.json({ error: message, pendingActions: newPendingActions }, { status });
+  }
 }
