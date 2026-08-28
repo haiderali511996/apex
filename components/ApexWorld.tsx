@@ -18,7 +18,7 @@ import OrbStatusBar from "./OrbStatusBar";
 import { useApexVoice } from "@/lib/useApexVoice";
 import ApexCaptions from "./ApexCaptions";
 import VoicePicker from "./VoicePicker";
-import ImexFace from "./ImexFace";
+import ImexHologram from "./ImexHologram";
 import CameraView from "./CameraView";
 import { useCamera } from "@/lib/useCamera";
 
@@ -598,7 +598,7 @@ export default function ApexWorld() {
 
       {/* The face sits over everything; the voice loop keeps running behind it
           so the conversation continues while it's open. */}
-      {faceOpen && <ImexFace state={voice.state} onClose={() => setFaceOpen(false)} />}
+      {faceOpen && <ImexHologram voiceState={voice.state} onClose={() => setFaceOpen(false)} />}
 
       {camera.open && (
         <CameraView stream={camera.stream.current} looking={looking} onClose={camera.stop} />
