@@ -1,4 +1,15 @@
-export type Platform = "search_console" | "meta" | "youtube" | "x" | "tiktok";
+export type Platform =
+  | "search_console"
+  | "meta"
+  | "youtube"
+  | "x"
+  | "tiktok"
+  | "email"
+  | "calendar"
+  | "drive"
+  | "crm"
+  | "finance"
+  | "analytics";
 
 export type ConnectorStatus = {
   platform: Platform;

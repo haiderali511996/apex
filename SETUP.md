@@ -21,12 +21,14 @@ The chat itself is powered by the Claude API.
 1. Get a key at https://console.anthropic.com/settings/keys.
 2. Set `ANTHROPIC_API_KEY`.
 
-## 2. Google — Search Console + YouTube
+## 2. Google — Search Console, YouTube, Gmail, Calendar, Drive, Sheets, Analytics
 
-Both share one OAuth app.
+All seven share **one** OAuth app and **one** refresh token.
 
 1. In [Google Cloud Console](https://console.cloud.google.com/), create a
-   project, then enable the **Search Console API** and **YouTube Data API v3**.
+   project, then enable: **Search Console API**, **YouTube Data API v3**,
+   **Gmail API**, **Google Calendar API**, **Google Drive API**,
+   **Google Sheets API**, and **Google Analytics Data API**.
 2. Under **APIs & Services → Credentials**, create an **OAuth client ID**
    (type: Web application). Add `https://developers.google.com/oauthplayground`
    as an authorized redirect URI (easiest way to mint a refresh token below).
@@ -34,14 +36,42 @@ Both share one OAuth app.
 4. Get a refresh token: go to the
    [OAuth Playground](https://developers.google.com/oauthplayground), click
    the gear icon, check "Use your own OAuth credentials", paste your client
-   ID/secret, then authorize scopes
-   `https://www.googleapis.com/auth/webmasters.readonly` and
-   `https://www.googleapis.com/auth/youtube.readonly`. Exchange the auth
-   code for tokens and copy the **refresh token** into `GOOGLE_REFRESH_TOKEN`.
+   ID/secret, then authorize **all** of these scopes at once:
+
+   ```
+   https://www.googleapis.com/auth/webmasters.readonly
+   https://www.googleapis.com/auth/youtube.readonly
+   https://www.googleapis.com/auth/gmail.readonly
+   https://www.googleapis.com/auth/gmail.send
+   https://www.googleapis.com/auth/calendar
+   https://www.googleapis.com/auth/drive.metadata.readonly
+   https://www.googleapis.com/auth/spreadsheets
+   https://www.googleapis.com/auth/analytics.readonly
+   ```
+
+   Exchange the auth code for tokens and copy the **refresh token** into
+   `GOOGLE_REFRESH_TOKEN`. (Authorize everything in one pass — a second
+   authorization for a different scope set replaces the first token.)
 5. `GSC_SITE_URL`: the exact property string as it appears in Search
    Console (`https://example.com/` or `sc-domain:example.com`).
-6. `YOUTUBE_CHANNEL_ID`: found under YouTube Studio → Settings → Channel →
-   Advanced settings.
+6. `YOUTUBE_CHANNEL_ID`: YouTube Studio → Settings → Channel → Advanced.
+7. `GA4_PROPERTY_ID`: GA4 Admin → Property Settings → the numeric property ID.
+8. `CRM_SHEET_ID`: from your sheet's URL,
+   `docs.google.com/spreadsheets/d/THIS_PART/edit`. Put column headers in
+   row 1 — include at least **Name** and **Stage** (plus whatever else you
+   track: Company, Email, Value, Notes). Set `CRM_SHEET_NAME` if your tab
+   isn't called `Sheet1`.
+
+While your Cloud project is in "Testing" mode, refresh tokens expire after
+7 days. Add yourself as a test user and, once you're relying on this daily,
+publish the app (or accept re-authorizing weekly).
+
+## 2b. Stripe (finance)
+
+1. In the [Stripe Dashboard](https://dashboard.stripe.com/apikeys), create a
+   **restricted key** with *read* access to Charges and Invoices.
+2. Set `STRIPE_SECRET_KEY`. The agent never writes to Stripe — a read-only
+   key is deliberate, so a mistake here can't move money.
 
 ## 3. Meta — Facebook Page + Instagram
 
@@ -92,11 +122,30 @@ before relying on this in production, and plan to rotate it.
    publicly. Until then, posts made through Apex land as private
    (`SELF_ONLY`) drafts on your account instead of going live.
 
+## What each node in the graph maps to
+
+| Node | Backed by |
+|------|-----------|
+| Chief of staff, Strategist, Researcher, Editor, Sales, Marketing, Ops, Engineering, Design, Developer | Claude specialists (`lib/agent/roles.ts`) — no account needed |
+| Memory | Durable facts stored in `data/agent-state.json` |
+| Social | Facebook, Instagram, X, TikTok |
+| Finance | Stripe |
+| Analytics | Google Analytics (GA4) |
+| CRM | Your Google Sheet pipeline |
+| Email / Calendar / Drive | Gmail, Google Calendar, Google Drive |
+
 ## Safety model
 
-Every "post" tool in the chat (`propose_facebook_post`,
-`propose_instagram_post`, `propose_tweet`, `propose_tiktok_post`) only
-queues a draft — it cannot publish anything by itself. You approve or
-reject each one in the `/agent` UI; only your approval triggers the real
-API call. This is deliberate: posting to a public account is hard to
-undo, so nothing goes out without you looking at it first.
+Anything **visible to other people or hard to undo** is approval-gated. The
+`propose_*` tools (`propose_facebook_post`, `propose_instagram_post`,
+`propose_tweet`, `propose_tiktok_post`, `propose_email`,
+`propose_calendar_event`) only queue a draft — they cannot publish, send,
+or schedule anything by themselves. You approve or reject each one in the
+`/agent` UI, and only your approval triggers the real API call.
+
+The exceptions are deliberate: reading data, and adding or updating a row
+in your own private CRM sheet, run immediately. Those are reversible and
+nobody else sees them.
+
+Stripe is wired read-only. The agent can tell you what you earned; it
+cannot issue a refund or move money.
