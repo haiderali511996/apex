@@ -35,11 +35,20 @@ export function speechSupported(): boolean {
 
 /**
  * Wake phrases that hand the rest of the sentence straight to the agent, so
- * "Hello Apex, how's my SEO?" is one uninterrupted request rather than a
- * wake-up followed by a second turn. Longest first: "hey apex" must not match
- * before "hello apex" and swallow the wrong prefix.
+ * "Hello Imex, how's my SEO?" is one uninterrupted request rather than a
+ * wake-up followed by a second turn. Longest first: "hey imex" must not match
+ * before "hello imex" and swallow the wrong prefix.
+ *
+ * "Imex" isn't a dictionary word, so recognizers routinely hear it as "IMAX",
+ * "I max", "eemex" or plain "Apex". Those spellings are accepted too —
+ * otherwise the wake word would fail for reasons the user can't see or fix.
  */
-const WAKE_PHRASES = ["hello apex", "hey apex", "hi apex", "ok apex", "okay apex", "apex"];
+const NAMES = ["imex", "imax", "i max", "eemex", "emex", "apex"];
+const GREETINGS = ["hello", "hey", "hi", "ok", "okay"];
+const WAKE_PHRASES = [
+  ...GREETINGS.flatMap((g) => NAMES.map((n) => `${g} ${n}`)),
+  ...NAMES,
+];
 
 /** Where the chosen voice is remembered between visits. */
 export const VOICE_STORAGE_KEY = "apex.voice";
@@ -172,32 +181,43 @@ export function useApexVoice(options: { speak?: boolean; wakeWord?: boolean } = 
         return;
       }
 
-      window.speechSynthesis.cancel();
-      setRevealed(0);
+      // Speech is a nicety; the text must survive any failure in it. A throw
+      // here would otherwise surface as a network error and hide the reply.
+      try {
+        window.speechSynthesis.cancel();
+        setRevealed(0);
 
-      const utter = new SpeechSynthesisUtterance(text);
-      const voice = pickVoice();
-      if (voice) {
-        utter.voice = voice;
-        utter.lang = voice.lang;
+        const utter = new SpeechSynthesisUtterance(text);
+        const voice = pickVoice();
+        if (voice) {
+          try {
+            utter.voice = voice;
+            utter.lang = voice.lang;
+          } catch {
+            // Some browsers reject the voice object; the default still speaks.
+          }
+        }
+        utter.rate = 1.0;
+        utter.pitch = 1.0;
+        utter.onboundary = (e: SpeechSynthesisEvent) => {
+          const end = e.charIndex + (e.charLength ?? 0);
+          if (end > revealedRef.current) setRevealed(Math.min(end, text.length));
+        };
+        utter.onend = finish;
+        utter.onerror = finish;
+
+        const tick = 60;
+        revealTimer.current = setInterval(() => {
+          const next = Math.min(revealedRef.current + (CHARS_PER_SEC * tick) / 1000, text.length);
+          setRevealed(next);
+          if (next >= text.length) stopReveal();
+        }, tick);
+
+        window.speechSynthesis.speak(utter);
+      } catch {
+        // No voice available — show the whole reply rather than nothing.
+        finish();
       }
-      utter.rate = 1.0;
-      utter.pitch = 1.0;
-      utter.onboundary = (e: SpeechSynthesisEvent) => {
-        const end = e.charIndex + (e.charLength ?? 0);
-        if (end > revealedRef.current) setRevealed(Math.min(end, text.length));
-      };
-      utter.onend = finish;
-      utter.onerror = finish;
-
-      const tick = 60;
-      revealTimer.current = setInterval(() => {
-        const next = Math.min(revealedRef.current + (CHARS_PER_SEC * tick) / 1000, text.length);
-        setRevealed(next);
-        if (next >= text.length) stopReveal();
-      }, tick);
-
-      window.speechSynthesis.speak(utter);
     },
     [speakEnabled, stopReveal, setRevealed]
   );
@@ -212,29 +232,34 @@ export function useApexVoice(options: { speak?: boolean; wakeWord?: boolean } = 
       setState("thinking");
       setError(null);
 
+      // Only the request itself is guarded here. Rendering and speaking the
+      // reply must not be able to masquerade as a network failure.
+      let data: { reply?: string; error?: string; pendingActions?: PendingAction[] };
       try {
         const res = await fetch("/api/agent/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ messages: next }),
         });
-        const data = await res.json();
-        const reply: string = data.reply || data.error || "Something went wrong.";
-        if (data.error) setError(data.error);
-
-        setMessages((m) => [...m, { role: "assistant", content: reply }]);
-        if (Array.isArray(data.pendingActions) && data.pendingActions.length) {
-          setPendingActions((prev) => [...data.pendingActions, ...prev]);
-        }
-
-        setState("speaking");
-        speak(reply, () => setState("idle"));
+        data = await res.json();
       } catch {
         const message = "I couldn't reach the server. Is it running?";
         setMessages((m) => [...m, { role: "assistant", content: message }]);
         setError(message);
         setState("idle");
+        return;
       }
+
+      const reply: string = data.reply || data.error || "Something went wrong.";
+      if (data.error) setError(data.error);
+
+      setMessages((m) => [...m, { role: "assistant", content: reply }]);
+      if (Array.isArray(data.pendingActions) && data.pendingActions.length) {
+        setPendingActions((prev) => [...(data.pendingActions ?? []), ...prev]);
+      }
+
+      setState("speaking");
+      speak(reply, () => setState("idle"));
     },
     [speak]
   );

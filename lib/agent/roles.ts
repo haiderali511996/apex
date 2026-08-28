@@ -52,7 +52,7 @@ export const SPECIALISTS: Record<string, { name: string; brief: string }> = {
   developer: {
     name: "Developer",
     brief:
-      "You keep Apex's build log. Recap what shipped over a day, week, or month in plain language, and note what's still open.",
+      "You keep Imex's build log. Recap what shipped over a day, week, or month in plain language, and note what's still open.",
   },
 };
 

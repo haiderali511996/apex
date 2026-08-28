@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Audition and choose the voice Apex speaks with. macOS ships ~200 voices
+ * Audition and choose the voice Imex speaks with. macOS ships ~200 voices
  * across every language, so this lists the English ones only, plays a sample
  * on demand, and remembers the choice in localStorage.
  */
@@ -45,7 +45,7 @@ export default function VoicePicker({ onClose }: { onClose: () => void }) {
   return (
     <div
       role="dialog"
-      aria-label="Choose Apex's voice"
+      aria-label="Choose Imex's voice"
       style={{
         position: "absolute", top: 190, right: "clamp(16px,3vw,40px)", zIndex: 70,
         width: "min(380px, 88vw)", maxHeight: "min(460px, 66vh)", display: "flex", flexDirection: "column",
@@ -56,7 +56,7 @@ export default function VoicePicker({ onClose }: { onClose: () => void }) {
     >
       <div style={{ display: "flex", alignItems: "center", padding: "13px 15px", borderBottom: `1px solid ${ACCENT}22` }}>
         <div>
-          <div style={{ fontFamily: "var(--font-mono)", fontSize: 10, letterSpacing: "0.24em", color: ACCENT }}>APEX VOICE</div>
+          <div style={{ fontFamily: "var(--font-mono)", fontSize: 10, letterSpacing: "0.24em", color: ACCENT }}>IMEX VOICE</div>
           <div style={{ fontSize: 10.5, color: "rgba(240,237,232,0.4)", marginTop: 3 }}>
             {voices.length} English voices — tap to hear
           </div>
