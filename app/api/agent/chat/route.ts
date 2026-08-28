@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { toolDefinitions, executeTool } from "@/lib/agent/tools";
+import { anthropicClient, MODEL } from "@/lib/agent/anthropicClient";
 import type { PendingAction } from "@/lib/agent/types";
 
 export const runtime = "nodejs";
@@ -22,9 +23,6 @@ Keep replies conversational and tight, the way you'd say them out loud — repli
 
 const MAX_TOOL_ROUNDS = 8;
 
-// Override with ANTHROPIC_MODEL in .env.local to point at a different model.
-const MODEL = process.env.ANTHROPIC_MODEL || "claude-opus-5";
-
 /** Turns an SDK failure into something the user can actually act on. */
 function describeError(err: unknown): { message: string; status: number } {
   if (err instanceof Anthropic.AuthenticationError) {
@@ -37,6 +35,14 @@ function describeError(err: unknown): { message: string; status: number } {
     return { message: "Rate limited by the Claude API — wait a moment and try again.", status: 429 };
   }
   if (err instanceof Anthropic.BadRequestError) {
+    // Identity-linked keys are rejected until they name a workspace.
+    if (/workspace/i.test(err.message)) {
+      return {
+        message:
+          "Your API key is identity-linked, so it needs a workspace. Add ANTHROPIC_WORKSPACE_ID to .env.local (Console → Settings → Workspaces; the id starts with wrkspc_) and restart the dev server.",
+        status: 400,
+      };
+    }
     return { message: `The Claude API rejected the request: ${err.message}`, status: 400 };
   }
   if (err instanceof Anthropic.APIConnectionError) {
@@ -63,7 +69,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "messages is required" }, { status: 400 });
   }
 
-  const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  const anthropic = anthropicClient();
   const newPendingActions: PendingAction[] = [];
 
   const conversation: Anthropic.MessageParam[] = messages.map((m) => ({ role: m.role, content: m.content }));
