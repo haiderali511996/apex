@@ -411,7 +411,7 @@ export default function ApexWorld() {
           aria-live="polite"
           style={{
             position: "absolute", top: 190, right: "clamp(16px,3vw,40px)", zIndex: 30,
-            width: "min(300px, 26vw)", textAlign: "right", pointerEvents: "none",
+            width: "min(240px, 19vw)", textAlign: "right", pointerEvents: "none",
           }}
         >
           <div style={{
@@ -423,7 +423,7 @@ export default function ApexWorld() {
           </div>
           {lastAsk && (
             <div style={{
-              fontSize: 13.5, lineHeight: 1.5, color: "rgba(240,237,232,0.72)",
+              fontSize: 11.5, lineHeight: 1.5, color: "rgba(240,237,232,0.72)",
             }}>
               “{lastAsk}”
             </div>
@@ -441,7 +441,7 @@ export default function ApexWorld() {
           aria-live="polite"
           style={{
             position: "absolute", left: "clamp(18px, 2.5vw, 34px)", top: 168,
-            width: "min(330px, 27vw)", zIndex: 20, fontSize: 13.5, lineHeight: 1.55, color: "#ffb4a2",
+            width: "min(250px, 19vw)", zIndex: 20, fontSize: 11.5, lineHeight: 1.5, color: "#ffb4a2",
           }}
         >
           {voice.error}
@@ -451,7 +451,7 @@ export default function ApexWorld() {
           aria-live="polite"
           style={{
             position: "absolute", left: "clamp(18px, 2.5vw, 34px)", top: 168,
-            zIndex: 20, fontFamily: "var(--font-mono)", fontSize: 12,
+            zIndex: 20, fontFamily: "var(--font-mono)", fontSize: 10.5,
             letterSpacing: "0.3em", color: "#f5a623",
           }}
         >

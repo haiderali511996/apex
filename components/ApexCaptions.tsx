@@ -66,14 +66,14 @@ export default function ApexCaptions({
       aria-live="polite"
       style={{
         position: "absolute", left: "clamp(18px, 2.5vw, 34px)", top: 168,
-        width: "min(330px, 27vw)", zIndex: 20, pointerEvents: "none",
+        width: "min(250px, 19vw)", zIndex: 20, pointerEvents: "none",
       }}
     >
       {previous.map((phrase, i) => (
         <div
           key={`${phrase}-${i}`}
           style={{
-            fontSize: "clamp(12px, 1.05vw, 15px)",
+            fontSize: "clamp(10px, 0.78vw, 12px)",
             lineHeight: 1.4,
             // The older of the two sits further back.
             color: `rgba(240,237,232,${i === previous.length - 1 ? 0.42 : 0.24})`,
@@ -86,8 +86,8 @@ export default function ApexCaptions({
 
       <div
         style={{
-          fontSize: "clamp(17px, 1.65vw, 24px)",
-          lineHeight: 1.28,
+          fontSize: "clamp(13px, 1.15vw, 17px)",
+          lineHeight: 1.3,
           color: CREAM,
           textShadow: `0 0 26px ${CREAM}44, 0 0 60px ${ACCENT}22`,
           marginTop: 5,
