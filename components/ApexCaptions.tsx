@@ -1,0 +1,130 @@
+"use client";
+
+/**
+ * Apex's voice, written the way the story section reads: short phrases in
+ * large type, the one being said right now lit, the ones just said fading
+ * above it. The reveal is driven by how far the speech has actually got, so
+ * the words land with the voice instead of arriving all at once.
+ */
+
+const ACCENT = "#00e5ff";
+const CREAM = "#ffeccc";
+
+/** Breaks a reply into speakable phrases — clause boundaries first, then long runs. */
+export function toPhrases(text: string, maxWords = 5): string[] {
+  const clauses = text
+    .split(/(?<=[.!?,;:—])\s+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const phrases: string[] = [];
+  for (const clause of clauses) {
+    const words = clause.split(/\s+/);
+    for (let i = 0; i < words.length; i += maxWords) {
+      phrases.push(words.slice(i, i + maxWords).join(" "));
+    }
+  }
+  return phrases.length ? phrases : [text];
+}
+
+export default function ApexCaptions({
+  text,
+  spokenChars,
+  speaking,
+  onStop,
+}: {
+  text: string;
+  spokenChars: number;
+  speaking: boolean;
+  onStop: () => void;
+}) {
+  if (!text) return null;
+
+  const phrases = toPhrases(text);
+
+  // Walk the phrases against the raw text so the character budget stays true
+  // even where splitting dropped whitespace.
+  let cursor = 0;
+  const ends = phrases.map((p) => {
+    const found = text.indexOf(p, cursor);
+    const start = found === -1 ? cursor : found;
+    cursor = start + p.length;
+    return cursor;
+  });
+
+  let activeIndex = ends.findIndex((end) => spokenChars < end);
+  if (activeIndex === -1) activeIndex = phrases.length - 1;
+
+  const previous = phrases.slice(Math.max(0, activeIndex - 2), activeIndex);
+  const active = phrases[activeIndex];
+
+  return (
+    <div
+      aria-live="polite"
+      style={{
+        position: "absolute", left: "clamp(24px, 6vw, 90px)", bottom: "clamp(90px, 16vh, 190px)",
+        width: "min(620px, 62vw)", zIndex: 20, pointerEvents: "none",
+      }}
+    >
+      {previous.map((phrase, i) => (
+        <div
+          key={`${phrase}-${i}`}
+          style={{
+            fontSize: "clamp(15px, 1.7vw, 21px)",
+            lineHeight: 1.35,
+            // The older of the two sits further back.
+            color: `rgba(240,237,232,${i === previous.length - 1 ? 0.42 : 0.24})`,
+            marginBottom: 4,
+          }}
+        >
+          {phrase}
+        </div>
+      ))}
+
+      <div
+        style={{
+          fontSize: "clamp(24px, 3.1vw, 40px)",
+          lineHeight: 1.22,
+          color: CREAM,
+          textShadow: `0 0 26px ${CREAM}44, 0 0 60px ${ACCENT}22`,
+          marginTop: 6,
+        }}
+      >
+        {active}
+      </div>
+
+      <div style={{ display: "flex", alignItems: "center", gap: 14, marginTop: 26, pointerEvents: "auto" }}>
+        <div style={{ display: "flex", gap: 9 }}>
+          {phrases.slice(0, 8).map((_, i) => (
+            <span
+              key={i}
+              style={{
+                width: 7, height: 7, borderRadius: "50%",
+                background: i === Math.min(activeIndex, 7) ? "#f5a623" : `${ACCENT}66`,
+                boxShadow: i === Math.min(activeIndex, 7) ? "0 0 10px #f5a623" : "none",
+                transition: "background .25s",
+              }}
+            />
+          ))}
+        </div>
+
+        {speaking && (
+          <button
+            type="button"
+            onClick={onStop}
+            style={{
+              display: "flex", alignItems: "center", gap: 9,
+              background: "rgba(4,8,15,0.6)", border: "1px solid rgba(240,237,232,0.22)",
+              borderRadius: 22, padding: "8px 18px", cursor: "pointer",
+              fontFamily: "var(--font-mono)", fontSize: 11, letterSpacing: "0.24em",
+              color: "rgba(240,237,232,0.85)", backdropFilter: "blur(6px)",
+            }}
+          >
+            <span style={{ width: 9, height: 9, background: "rgba(240,237,232,0.85)", borderRadius: 1 }} />
+            STOP
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}

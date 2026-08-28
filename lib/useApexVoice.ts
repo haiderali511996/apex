@@ -41,6 +41,39 @@ export function speechSupported(): boolean {
  */
 const WAKE_PHRASES = ["hello apex", "hey apex", "hi apex", "ok apex", "okay apex", "apex"];
 
+/**
+ * Which system voice Apex speaks with. The browser's default is usually the
+ * flattest one installed, so prefer the natural-sounding ones first. Override
+ * with NEXT_PUBLIC_APEX_VOICE (an exact name from speechSynthesis.getVoices())
+ * to pin a specific accent.
+ */
+const VOICE_PREFERENCES = [
+  "Google UK English Male",
+  "Daniel",
+  "Google UK English Female",
+  "Serena",
+  "Google US English",
+  "Samantha",
+];
+
+function pickVoice(): SpeechSynthesisVoice | null {
+  if (typeof window === "undefined" || !window.speechSynthesis) return null;
+  const voices = window.speechSynthesis.getVoices();
+  if (!voices.length) return null;
+
+  const pinned = process.env.NEXT_PUBLIC_APEX_VOICE?.trim();
+  if (pinned) {
+    const exact = voices.find((v) => v.name === pinned);
+    if (exact) return exact;
+  }
+  for (const name of VOICE_PREFERENCES) {
+    const match = voices.find((v) => v.name === name);
+    if (match) return match;
+  }
+  // Anything English and local beats the remote default.
+  return voices.find((v) => v.lang?.startsWith("en") && v.localService) ?? voices.find((v) => v.lang?.startsWith("en")) ?? null;
+}
+
 /** Returns whatever followed the wake phrase, or null when none was said. */
 function matchWake(transcript: string): string | null {
   const normalized = transcript.toLowerCase().replace(/[.,!?]/g, " ").replace(/\s+/g, " ").trim();
@@ -63,6 +96,9 @@ export function useApexVoice(options: { speak?: boolean; wakeWord?: boolean } = 
   const [pendingActions, setPendingActions] = useState<PendingAction[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [wakeWordOn, setWakeWordOn] = useState(false);
+  // The reply being spoken, and how much of it has been voiced so far.
+  const [spokenText, setSpokenText] = useState("");
+  const [spokenChars, setSpokenChars] = useState(0);
 
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const wakeRef = useRef<SpeechRecognitionLike | null>(null);
@@ -75,19 +111,70 @@ export function useApexVoice(options: { speak?: boolean; wakeWord?: boolean } = 
   const messagesRef = useRef<ChatMessage[]>([]);
   messagesRef.current = messages;
 
+  /**
+   * The reply is revealed in step with the voice rather than dumped at once.
+   * Word-boundary events are the accurate signal, but they don't fire in every
+   * browser, so a paced timer runs underneath and boundaries pull the reveal
+   * forward whenever they arrive — the text keeps flowing either way.
+   */
+  const CHARS_PER_SEC = 13; // ≈150 wpm, the default synthesis rate
+  const revealTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const revealedRef = useRef(0);
+
+  const stopReveal = useCallback(() => {
+    if (revealTimer.current) clearInterval(revealTimer.current);
+    revealTimer.current = null;
+  }, []);
+
+  const setRevealed = useCallback((n: number) => {
+    revealedRef.current = n;
+    setSpokenChars(n);
+  }, []);
+
   const speak = useCallback(
     (text: string, onDone?: () => void) => {
-      if (!speakEnabled || typeof window === "undefined" || !window.speechSynthesis) {
+      stopReveal();
+      setSpokenText(text);
+
+      const finish = () => {
+        stopReveal();
+        setRevealed(text.length);
         onDone?.();
+      };
+
+      if (!speakEnabled || typeof window === "undefined" || !window.speechSynthesis) {
+        finish();
         return;
       }
+
       window.speechSynthesis.cancel();
+      setRevealed(0);
+
       const utter = new SpeechSynthesisUtterance(text);
-      utter.onend = () => onDone?.();
-      utter.onerror = () => onDone?.();
+      const voice = pickVoice();
+      if (voice) {
+        utter.voice = voice;
+        utter.lang = voice.lang;
+      }
+      utter.rate = 1.0;
+      utter.pitch = 1.0;
+      utter.onboundary = (e: SpeechSynthesisEvent) => {
+        const end = e.charIndex + (e.charLength ?? 0);
+        if (end > revealedRef.current) setRevealed(Math.min(end, text.length));
+      };
+      utter.onend = finish;
+      utter.onerror = finish;
+
+      const tick = 60;
+      revealTimer.current = setInterval(() => {
+        const next = Math.min(revealedRef.current + (CHARS_PER_SEC * tick) / 1000, text.length);
+        setRevealed(next);
+        if (next >= text.length) stopReveal();
+      }, tick);
+
       window.speechSynthesis.speak(utter);
     },
-    [speakEnabled]
+    [speakEnabled, stopReveal, setRevealed]
   );
 
   const send = useCallback(
@@ -178,6 +265,13 @@ export function useApexVoice(options: { speak?: boolean; wakeWord?: boolean } = 
       setState("idle");
     }
   }, [send]);
+
+  /** Cuts the voice off mid-sentence and settles the caption where it stopped. */
+  const stopSpeaking = useCallback(() => {
+    if (typeof window !== "undefined") window.speechSynthesis?.cancel();
+    stopReveal();
+    setState((s) => (s === "speaking" ? "idle" : s));
+  }, [stopReveal]);
 
   /** One tap: start listening, or stop whatever is currently happening. */
   const toggle = useCallback(() => {
@@ -315,6 +409,16 @@ export function useApexVoice(options: { speak?: boolean; wakeWord?: boolean } = 
     [speak]
   );
 
+  // Chrome populates getVoices() asynchronously and returns an empty list on
+  // the first call, so warm it up before the first reply needs a voice.
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.speechSynthesis) return;
+    window.speechSynthesis.getVoices();
+    const onVoices = () => window.speechSynthesis.getVoices();
+    window.speechSynthesis.addEventListener?.("voiceschanged", onVoices);
+    return () => window.speechSynthesis.removeEventListener?.("voiceschanged", onVoices);
+  }, []);
+
   // Opt in from the caller; the mic only opens once the browser grants it.
   const wantWakeWord = options.wakeWord ?? false;
   useEffect(() => {
@@ -328,9 +432,10 @@ export function useApexVoice(options: { speak?: boolean; wakeWord?: boolean } = 
       wakeWantedRef.current = false;
       try { wakeRef.current?.stop(); } catch { /* already stopped */ }
       recognitionRef.current?.stop();
+      stopReveal();
       if (typeof window !== "undefined") window.speechSynthesis?.cancel();
     };
-  }, []);
+  }, [stopReveal]);
 
   return {
     messages,
@@ -347,6 +452,13 @@ export function useApexVoice(options: { speak?: boolean; wakeWord?: boolean } = 
     wakeWordOn,
     startWakeWord,
     stopWakeWord,
+    stopSpeaking,
+    /** How far the voice has got through the reply, in characters. */
+    spokenChars: Math.floor(spokenChars),
+    /** The reply as far as it has been spoken — grows in step with the voice. */
+    spokenSoFar: spokenText.slice(0, Math.floor(spokenChars)),
+    /** True while there is still more of the reply left to voice. */
+    stillSpeaking: spokenChars < spokenText.length,
     supported: speechSupported(),
   };
 }
