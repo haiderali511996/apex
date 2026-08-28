@@ -41,29 +41,54 @@ export function speechSupported(): boolean {
  */
 const WAKE_PHRASES = ["hello apex", "hey apex", "hi apex", "ok apex", "okay apex", "apex"];
 
+/** Where the chosen voice is remembered between visits. */
+export const VOICE_STORAGE_KEY = "apex.voice";
+
 /**
- * Which system voice Apex speaks with. The browser's default is usually the
- * flattest one installed, so prefer the natural-sounding ones first. Override
- * with NEXT_PUBLIC_APEX_VOICE (an exact name from speechSynthesis.getVoices())
- * to pin a specific accent.
+ * Fallback order when nothing has been chosen yet. The browser's own default
+ * is usually the flattest voice installed, so name the good ones first:
+ * Daniel and Serena are macOS British, the Google ones are Chrome's.
  */
 const VOICE_PREFERENCES = [
   "Google UK English Male",
   "Daniel",
-  "Google UK English Female",
   "Serena",
+  "Google UK English Female",
   "Google US English",
   "Samantha",
 ];
 
-function pickVoice(): SpeechSynthesisVoice | null {
+/** English voices only — the roster runs to ~200 entries across every language. */
+export function englishVoices(): SpeechSynthesisVoice[] {
+  if (typeof window === "undefined" || !window.speechSynthesis) return [];
+  return window.speechSynthesis.getVoices().filter((v) => v.lang?.toLowerCase().startsWith("en"));
+}
+
+export function savedVoiceName(): string | null {
+  try {
+    return window.localStorage.getItem(VOICE_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function saveVoiceName(name: string) {
+  try {
+    window.localStorage.setItem(VOICE_STORAGE_KEY, name);
+  } catch {
+    // private mode — the choice just won't persist
+  }
+}
+
+export function pickVoice(): SpeechSynthesisVoice | null {
   if (typeof window === "undefined" || !window.speechSynthesis) return null;
   const voices = window.speechSynthesis.getVoices();
   if (!voices.length) return null;
 
-  const pinned = process.env.NEXT_PUBLIC_APEX_VOICE?.trim();
-  if (pinned) {
-    const exact = voices.find((v) => v.name === pinned);
+  // What the user picked wins, then a build-time pin, then the preference list.
+  const chosen = savedVoiceName() || process.env.NEXT_PUBLIC_APEX_VOICE?.trim();
+  if (chosen) {
+    const exact = voices.find((v) => v.name === chosen);
     if (exact) return exact;
   }
   for (const name of VOICE_PREFERENCES) {

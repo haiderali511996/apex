@@ -17,6 +17,7 @@ import ShaderBackgroundJs from "./ShaderBackground";
 import OrbStatusBar from "./OrbStatusBar";
 import { useApexVoice } from "@/lib/useApexVoice";
 import ApexCaptions from "./ApexCaptions";
+import VoicePicker from "./VoicePicker";
 
 export type NodeSel = { name: string; key: string; color: string };
 
@@ -242,6 +243,7 @@ export default function ApexWorld() {
   // Wake word stays off until asked for: an always-on mic is the user's call,
   // and Chrome won't grant one without a gesture anyway.
   const [wakeWord, setWakeWord] = useState(false);
+  const [voicePickerOpen, setVoicePickerOpen] = useState(false);
   const voice = useApexVoice({ wakeWord });
   const orbState: OrbState =
     voice.state === "speaking" ? "speaking" : voice.state === "idle" ? "idle" : "thinking";
@@ -356,23 +358,48 @@ export default function ApexWorld() {
       {/* equalizer + STANDBY cluster - shows LISTENING / PROCESSING / SPEAKING */}
       <OrbStatusBar state={voice.state} />
 
-      {/* Hands-free toggle. Off by default — an always-on mic is opt-in. */}
-      <button
-        type="button"
-        onClick={() => setWakeWord((v) => !v)}
-        aria-pressed={wakeWord}
-        style={{
-          position: "absolute", top: 16, left: "clamp(16px,3vw,40px)", zIndex: 40,
-          fontFamily: "var(--font-mono)", fontSize: "0.62rem", letterSpacing: "0.2em",
-          textTransform: "uppercase", cursor: "pointer",
-          color: wakeWord ? "#04080f" : "rgba(240,237,232,0.7)",
-          background: wakeWord ? "#f5a623" : "rgba(4,8,15,0.5)",
-          border: `1px solid ${wakeWord ? "#f5a623" : "rgba(240,237,232,0.2)"}`,
-          borderRadius: 20, padding: "7px 15px", backdropFilter: "blur(6px)",
-        }}
-      >
-        {wakeWord ? "● Hands-free on" : 'Say "Hello Apex"'}
-      </button>
+      {/* Voice controls live on the right: the whole top-left belongs to the
+          OVERVIEW lamp, whose filament is one big click target and would
+          swallow taps meant for these. */}
+      <div style={{
+        position: "absolute", top: 104, right: "clamp(16px,3vw,40px)", zIndex: 45,
+        display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 8,
+      }}>
+        {/* Off by default — an always-on mic is opt-in. */}
+        <button
+          type="button"
+          onClick={() => setWakeWord((v) => !v)}
+          aria-pressed={wakeWord}
+          style={{
+            fontFamily: "var(--font-mono)", fontSize: "0.62rem", letterSpacing: "0.2em",
+            textTransform: "uppercase", cursor: "pointer", whiteSpace: "nowrap",
+            color: wakeWord ? "#04080f" : "rgba(240,237,232,0.7)",
+            background: wakeWord ? "#f5a623" : "rgba(4,8,15,0.5)",
+            border: `1px solid ${wakeWord ? "#f5a623" : "rgba(240,237,232,0.2)"}`,
+            borderRadius: 20, padding: "7px 15px", backdropFilter: "blur(6px)",
+          }}
+        >
+          {wakeWord ? "● Hands-free on" : 'Say "Hello Apex"'}
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setVoicePickerOpen((v) => !v)}
+          aria-expanded={voicePickerOpen}
+          style={{
+            fontFamily: "var(--font-mono)", fontSize: "0.62rem", letterSpacing: "0.2em",
+            textTransform: "uppercase", cursor: "pointer", whiteSpace: "nowrap",
+            color: voicePickerOpen ? "#04080f" : "rgba(240,237,232,0.7)",
+            background: voicePickerOpen ? ACCENT : "rgba(4,8,15,0.5)",
+            border: `1px solid ${voicePickerOpen ? ACCENT : "rgba(240,237,232,0.2)"}`,
+            borderRadius: 20, padding: "7px 15px", backdropFilter: "blur(6px)",
+          }}
+        >
+          Voice
+        </button>
+      </div>
+
+      {voicePickerOpen && <VoicePicker onClose={() => setVoicePickerOpen(false)} />}
 
       {/* Apex's side of the conversation, written into the same HUD as the
           clock: the text is revealed in step with the voice, so it reads as
