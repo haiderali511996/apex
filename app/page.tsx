@@ -1,3 +1,4 @@
+import Link from "next/link";
 import ApexWorld from "@/components/ApexWorld";
 import ApexOverviewPanel from "@/components/ApexOverviewPanel";
 
@@ -31,6 +32,19 @@ export default function Home() {
       >
         View on GitHub ↗
       </a>
+
+      <Link
+        href="/agent"
+        style={{
+          position: "absolute", top: 60, right: "clamp(16px,3vw,40px)", zIndex: 40,
+          fontFamily: "var(--font-mono)", fontSize: "0.66rem", letterSpacing: "0.24em",
+          textTransform: "uppercase", color: "#04080f", textDecoration: "none",
+          border: "1px solid #00e5ff", borderRadius: 20, padding: "7px 15px",
+          background: "#00e5ff",
+        }}
+      >
+        Talk to Apex ↗
+      </Link>
     </main>
   );
 }
