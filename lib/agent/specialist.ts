@@ -1,7 +1,6 @@
-import Anthropic from "@anthropic-ai/sdk";
+import type Anthropic from "@anthropic-ai/sdk";
 import { SPECIALISTS } from "./roles";
-
-const MODEL = process.env.ANTHROPIC_MODEL || "claude-opus-5";
+import { anthropicClient, MODEL } from "./anthropicClient";
 
 /**
  * Runs one specialist as a focused sub-call. No tools: these roles reason over
@@ -13,7 +12,7 @@ export async function askSpecialist(role: string, request: string, context?: str
   if (!specialist) throw new Error(`Unknown specialist: ${role}`);
   if (!process.env.ANTHROPIC_API_KEY) throw new Error("ANTHROPIC_API_KEY is not set.");
 
-  const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  const anthropic = anthropicClient();
   const response = await anthropic.messages.create({
     model: MODEL,
     max_tokens: 8000,

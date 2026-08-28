@@ -20,6 +20,13 @@ The chat itself is powered by the Claude API.
 
 1. Get a key at https://console.anthropic.com/settings/keys.
 2. Set `ANTHROPIC_API_KEY`.
+3. If requests come back with *"anthropic-workspace-id is required when
+   authenticating with an identity-linked API key"*, your key belongs to
+   you rather than to a workspace and has to name the workspace it acts
+   in. Set `ANTHROPIC_WORKSPACE_ID` as well — find it under Console →
+   Settings → Workspaces (the id starts with `wrkspc_`, and also appears
+   in the URL when you open a workspace). Keys created directly inside a
+   workspace don't need this.
 
 ## 2. Google — Search Console, YouTube, Gmail, Calendar, Drive, Sheets, Analytics
 
