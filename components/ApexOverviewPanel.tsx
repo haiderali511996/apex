@@ -40,15 +40,33 @@ function Clock() {
 
   useEffect(() => {
     let ok = true;
-    // Via our own API route, so open-meteo never sees visitor IPs. The route
-    // returns the visitor's own city + weather (Vercel geo headers).
-    const load = () =>
-      fetch("/api/weather")
+    // Via our own API route, so open-meteo never sees visitor IPs.
+    const load = (coords?: { lat: number; lon: number }) => {
+      const qs = coords ? `?lat=${coords.lat}&lon=${coords.lon}` : "";
+      return fetch(`/api/weather${qs}`)
         .then((r) => r.json())
         .then((d) => { if (ok) setWx({ temp: d.current?.temperature_2m ?? null, code: d.current?.weather_code ?? null, city: d.city || "your town" }); })
         .catch(() => {});
-    load();
-    const id = setInterval(load, 1200000);
+    };
+
+    // Ask the browser where we are. On localhost there are no Vercel geo
+    // headers, so this is the only source that knows. If the visitor declines
+    // or the browser can't say, fall back to the route's own detection.
+    let coords: { lat: number; lon: number } | undefined;
+    const start = () => {
+      if (!navigator.geolocation) { load(); return; }
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          coords = { lat: pos.coords.latitude, lon: pos.coords.longitude };
+          load(coords);
+        },
+        () => load(),
+        { timeout: 8000, maximumAge: 600000 }
+      );
+    };
+    start();
+
+    const id = setInterval(() => load(coords), 1200000);
     return () => { ok = false; clearInterval(id); };
   }, []);
 

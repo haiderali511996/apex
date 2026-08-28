@@ -16,8 +16,11 @@ import ReasoningWebJs from "./ReasoningWeb";
 import ShaderBackgroundJs from "./ShaderBackground";
 import OrbStatusBar from "./OrbStatusBar";
 import { useApexVoice } from "@/lib/useApexVoice";
+import ApexCaptions from "./ApexCaptions";
 
 export type NodeSel = { name: string; key: string; color: string };
+
+const ACCENT = "#00e5ff";
 
 // the copied .jsx defaults onSelect to null, which TS infers as `null | undefined`
 const ReasoningWeb = ReasoningWebJs as unknown as React.ComponentType<{
@@ -243,7 +246,10 @@ export default function ApexWorld() {
   const orbState: OrbState =
     voice.state === "speaking" ? "speaking" : voice.state === "idle" ? "idle" : "thinking";
 
-  const lastReply = [...voice.messages].reverse().find((m) => m.role === "assistant")?.content ?? null;
+  // While Apex is talking, show only what it has actually said so far; once
+  // it's done (or muted), the whole reply stands.
+  const lastReply = [...voice.messages].reverse().find((m) => m.role === "assistant")?.content ?? "";
+  const transcript = voice.spokenSoFar || (voice.stillSpeaking ? "" : lastReply);
 
   // Single entry point for opening an agent, shared by the SVG graph and the
   // hidden accessible list, so both routes behave identically.
@@ -368,25 +374,38 @@ export default function ApexWorld() {
         {wakeWord ? "● Hands-free on" : 'Say "Hello Apex"'}
       </button>
 
-      {/* What Apex just heard and said, so the conversation is readable and not
-          only audible (and so it still works with the speakers muted). */}
-      <div
-        aria-live="polite"
-        style={{
-          position: "absolute", left: "50%", bottom: "clamp(96px, 14vh, 150px)", transform: "translateX(-50%)",
-          width: "min(620px, 86vw)", zIndex: 5, textAlign: "center", pointerEvents: "none",
-        }}
-      >
-        {voice.error ? (
-          <div style={{ fontSize: 13, lineHeight: 1.5, color: "#ffb4a2" }}>{voice.error}</div>
-        ) : voice.state === "listening" ? (
-          <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, letterSpacing: "0.28em", color: "#f5a623" }}>
-            LISTENING…
-          </div>
-        ) : lastReply ? (
-          <div style={{ fontSize: 14, lineHeight: 1.55, color: "rgba(240,237,232,0.82)" }}>{lastReply}</div>
-        ) : null}
-      </div>
+      {/* Apex's side of the conversation, written into the same HUD as the
+          clock: the text is revealed in step with the voice, so it reads as
+          Apex talking rather than a block of text dropped in at the end. */}
+      {voice.error ? (
+        <div
+          aria-live="polite"
+          style={{
+            position: "absolute", left: "clamp(24px, 6vw, 90px)", bottom: "clamp(90px, 16vh, 190px)",
+            width: "min(560px, 60vw)", zIndex: 20, fontSize: 14.5, lineHeight: 1.55, color: "#ffb4a2",
+          }}
+        >
+          {voice.error}
+        </div>
+      ) : voice.state === "listening" ? (
+        <div
+          aria-live="polite"
+          style={{
+            position: "absolute", left: "clamp(24px, 6vw, 90px)", bottom: "clamp(90px, 16vh, 190px)",
+            zIndex: 20, fontFamily: "var(--font-mono)", fontSize: 12,
+            letterSpacing: "0.3em", color: "#f5a623",
+          }}
+        >
+          LISTENING…
+        </div>
+      ) : (
+        <ApexCaptions
+          text={lastReply}
+          spokenChars={voice.spokenChars}
+          speaking={voice.state === "speaking"}
+          onStop={voice.stopSpeaking}
+        />
+      )}
 
       {/* Approve / reject anything the agent proposed out loud. */}
       {voice.pendingActions.filter((a) => a.status === "pending").length > 0 && (
