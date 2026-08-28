@@ -1,7 +1,7 @@
 # APEX-UI
 
 An animated **autonomous-agent orb + reasoning-graph** interface — the front-end of
-[Apex](https://reznikov-engineering.com/apex), released open source.
+Apex, released open source.
 
 Tap the orb to cycle its state (idle → thinking → speaking); the reasoning web reacts,
 agent nodes orbit the core, and clicking any node opens an overview card. The orb ring,
@@ -61,11 +61,11 @@ left out. The orb stays fully interactive without them.
 
 Code is released under the **[MIT License](./LICENSE)** — use it, fork it, ship it.
 
-The **name "Apex" and the Reznikov Engineering branding are not part of this license.**
+The **name "Apex" and the Haider Ali branding are not part of this license.**
 If you build on this, please use your own product name and branding.
 
 ---
 
-Made by [Ruben Mouradian — Reznikov Engineering](https://reznikov-engineering.com).
+Made by Haider Ali — Software Engineer.
 If you use it, a link back is appreciated (not required).
 # apex
