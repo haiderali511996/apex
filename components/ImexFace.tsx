@@ -1,56 +1,151 @@
 "use client";
 
 /**
- * Imex's face: a cyan wireframe bust drawn as horizontal contour slices, with
- * a warm energy core where the face would be. The core's bands ripple while
- * Imex speaks and settle when it listens, so the state is readable across a
- * room without looking at any text.
+ * Imex's face — a bust rendered as a dot matrix on canvas.
  *
- * Built the same way as the orb — hand-written SVG, no 3D — so it stays sharp
- * at any size and costs nothing to animate.
+ * The figure is sampled on a regular grid clipped to a human silhouette, so
+ * the surface reads as rows of points the way the reference does. Three things
+ * carry the look:
+ *
+ *  - a bright continuous rim, from points sitting within a few units of the
+ *    silhouette edge;
+ *  - flow lines — arcs fanning across the chest from the base of the neck, and
+ *    horizontal banding across the skull — drawn by modulating brightness
+ *    rather than by moving points, so the grid stays intact;
+ *  - a warm core at the face and gold filaments up the sternum, whose
+ *    brightness follows the voice.
+ *
+ * Every point springs to its target from a scattered start, so the bust
+ * assembles out of dust when the screen opens. Canvas rather than SVG:
+ * this is ~12k independently moving points.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import type { VoiceState } from "@/lib/useApexVoice";
 
-const CYAN = "#00e5ff";
-const CYAN_SOFT = "#4fd8ff";
-const GOLD = "#ff9d2e";
-const GOLD_HOT = "#ffe08a";
+/* ── silhouette, in bust-space units around the origin ──────────────────── */
 
-const VB_W = 600;
-const VB_H = 700;
+const HEAD = { cx: 0, cy: -168, rx: 116, ry: 152 };
+const JAW = -20;          // where the head ends and the neck begins
+const NECK_BOTTOM = 66;
+const SHOULDER_SPAN = 250;
+const BODY_END = 400;
 
-const HEAD = { cx: 300, cy: 232, rx: 82, ry: 118 };
-const FACE = { cx: 300, cy: 250, rx: 52, ry: 70 };
+const FACE = { cx: 0, cy: -150, rx: 78, ry: 92 };
 
-const NECK_TOP = 336;
-const NECK_BOTTOM = 398;
-const SHOULDER_END = 700;
-
-/** Half-width of the head silhouette at a given y, or 0 outside it. */
 function headHalfWidth(y: number): number {
   const t = (y - HEAD.cy) / HEAD.ry;
   if (Math.abs(t) >= 1) return 0;
-  // Narrower towards the chin, the way a jaw tapers.
-  const taper = t > 0 ? 1 - t * t * 0.3 : 1;
+  // Cheeks stay wide, then the jaw draws in.
+  const taper = t > 0.35 ? 1 - Math.pow((t - 0.35) / 0.65, 2) * 0.42 : 1;
   return HEAD.rx * Math.sqrt(1 - t * t) * taper;
 }
 
-/**
- * Half-width of the neck and shoulders. The shoulders flare fast just below
- * the neck and then flatten, which is what makes it read as a bust rather
- * than a cone.
- */
-function bodyHalfWidth(y: number): number {
+function neckHalfWidth(y: number): number {
+  const k = (y - JAW) / (NECK_BOTTOM - JAW);
+  return 54 + k * 14;
+}
+
+function shoulderHalfWidth(y: number): number {
+  const k = Math.min(1, (y - NECK_BOTTOM) / SHOULDER_SPAN);
+  return 68 + Math.sin((k * Math.PI) / 2) * 244;
+}
+
+/** Half-width of the whole bust at a given y, or 0 outside it. */
+function halfWidthAt(y: number): number {
+  if (y < JAW) return headHalfWidth(y);
   if (y < NECK_BOTTOM) {
-    const k = (y - NECK_TOP) / (NECK_BOTTOM - NECK_TOP);
-    return 34 + k * 10;
+    // The trapezius starts before the neck ends, so take the wider of the two.
+    return Math.max(neckHalfWidth(y), y > NECK_BOTTOM - 26 ? shoulderHalfWidth(y) * 0.5 : 0);
   }
-  // Shoulders round out over ~220px and then run straight down out of frame,
-  // which is what stops the bust reading as a bell.
-  const k = Math.min(1, (y - NECK_BOTTOM) / 220);
-  return 44 + Math.sin((k * Math.PI) / 2) * 152;
+  return shoulderHalfWidth(y);
+}
+
+type P = {
+  tx: number; ty: number;
+  x: number; y: number;
+  vx: number; vy: number;
+  size: number;
+  /** 0..1 base brightness from the surface shading. */
+  lit: number;
+  rim: boolean;
+  core: boolean;
+  gold: boolean;
+  phase: number;
+  depth: number;
+};
+
+const STEP = 1.75;
+
+function buildParticles(): P[] {
+  const ps: P[] = [];
+  const push = (p: Omit<P, "x" | "y" | "vx" | "vy" | "phase">) =>
+    ps.push({ ...p, x: 0, y: 0, vx: 0, vy: 0, phase: Math.random() * Math.PI * 2 });
+
+  for (let y = HEAD.cy - HEAD.ry; y < BODY_END; y += STEP) {
+    const w = halfWidthAt(y);
+    if (w < 2) continue;
+
+    for (let x = -w; x <= w; x += STEP) {
+      const edgeDist = w - Math.abs(x);
+      const rim = edgeDist < 3.2;
+
+      // Skip the odd interior point so the matrix breathes.
+      if (!rim && Math.random() < 0.06) continue;
+
+      const inFace =
+        Math.pow((x - FACE.cx) / FACE.rx, 2) + Math.pow((y - FACE.cy) / FACE.ry, 2) < 1;
+
+      let lit: number;
+      if (rim) {
+        lit = 1;
+      } else if (y < JAW) {
+        // Horizontal banding across the skull.
+        lit = 0.42 + 0.34 * Math.pow(Math.sin(y * 0.42), 2) + (1 - Math.abs(x) / w) * 0.08;
+      } else {
+        // Arcs fanning out from the base of the neck across the chest.
+        const r = Math.hypot(x * 0.82, (y - NECK_BOTTOM + 8) * 1.25);
+        lit = 0.26 + 0.42 * Math.pow(Math.sin(r * 0.085), 2);
+      }
+
+      // Gold filaments climbing the sternum into the throat.
+      const sternum =
+        y > NECK_BOTTOM - 34 &&
+        y < NECK_BOTTOM + 132 &&
+        Math.abs(Math.abs(x) - (y - NECK_BOTTOM + 44) * 0.3) < 3.2 &&
+        Math.abs(x) < 62;
+
+      push({
+        tx: x + (Math.random() - 0.5) * 0.5,
+        ty: y + (Math.random() - 0.5) * 0.5,
+        size: rim ? 1 : 1,
+        lit,
+        rim,
+        core: inFace && y < JAW,
+        gold: sternum,
+        depth: rim ? 0.55 : inFace ? 0.9 : 0.35,
+      });
+    }
+  }
+
+  // Spray off the crown and along the shoulders.
+  for (let i = 0; i < 420; i++) {
+    const crown = Math.random() < 0.6;
+    const a = crown
+      ? -Math.PI / 2 + (Math.random() - 0.5) * 1.9
+      : (Math.random() < 0.5 ? Math.PI : 0) + (Math.random() - 0.5) * 0.9;
+    const d = (crown ? HEAD.ry : 250) + Math.random() * 90;
+    push({
+      tx: Math.cos(a) * d * (crown ? 0.7 : 1.02),
+      ty: (crown ? HEAD.cy : 190) + Math.sin(a) * d * (crown ? 1 : 0.35),
+      size: 0.8 + Math.random() * 1.1,
+      lit: 0.25 + Math.random() * 0.55,
+      rim: false, core: false, gold: false,
+      depth: 0.18,
+    });
+  }
+
+  return ps;
 }
 
 export default function ImexFace({
@@ -60,115 +155,194 @@ export default function ImexFace({
   state: VoiceState;
   onClose: () => void;
 }) {
-  const speaking = state === "speaking";
-  const listening = state === "listening";
-
-  /**
-   * Imex turns toward the cursor. Each layer shifts by a different amount —
-   * the core most, the halo least — so the parallax reads as a head turning
-   * rather than a picture sliding around. Updates are coalesced into one
-   * animation frame so a fast mouse can't flood React with renders.
-   */
-  const [gaze, setGaze] = useState({ x: 0, y: 0 });
-  const frame = useRef<number | null>(null);
-  const pending = useRef({ x: 0, y: 0 });
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const stateRef = useRef<VoiceState>(state);
+  stateRef.current = state;
 
   useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d", { alpha: false });
+    if (!ctx) return;
+
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const particles = buildParticles();
+    const gaze = { x: 0, y: 0, tx: 0, ty: 0 };
+
+    for (const p of particles) {
+      const spread = 1.8 + Math.random() * 1.1;
+      p.x = p.tx * spread + (Math.random() - 0.5) * 90;
+      p.y = p.ty * spread + (Math.random() - 0.5) * 90;
+    }
+    if (reduced) for (const p of particles) { p.x = p.tx; p.y = p.ty; }
+
+    let w = 0, h = 0, scale = 1, dpr = 1;
+    const resize = () => {
+      dpr = Math.min(window.devicePixelRatio || 1, 2);
+      w = canvas.clientWidth;
+      h = canvas.clientHeight;
+      canvas.width = Math.round(w * dpr);
+      canvas.height = Math.round(h * dpr);
+      scale = Math.min(w / 900, h / 830);
+    };
+    resize();
+    window.addEventListener("resize", resize);
+
     const onMove = (e: MouseEvent) => {
-      // -1..1 from the centre of the viewport, eased so the extremes are gentle.
-      const nx = (e.clientX / window.innerWidth - 0.5) * 2;
-      const ny = (e.clientY / window.innerHeight - 0.5) * 2;
-      pending.current = {
-        x: Math.sign(nx) * Math.pow(Math.min(1, Math.abs(nx)), 0.8),
-        y: Math.sign(ny) * Math.pow(Math.min(1, Math.abs(ny)), 0.8),
-      };
-      if (frame.current != null) return;
-      frame.current = requestAnimationFrame(() => {
-        frame.current = null;
-        setGaze(pending.current);
-      });
+      gaze.tx = (e.clientX / window.innerWidth - 0.5) * 2;
+      gaze.ty = (e.clientY / window.innerHeight - 0.5) * 2;
     };
     window.addEventListener("mousemove", onMove);
+
+    let raf = 0, t = 0, voice = 0;
+
+    const draw = () => {
+      t += 0.016;
+      const speaking = stateRef.current === "speaking";
+      const listening = stateRef.current === "listening";
+      voice += ((speaking ? 1 : 0) - voice) * 0.09;
+
+      gaze.x += (gaze.tx - gaze.x) * 0.06;
+      gaze.y += (gaze.ty - gaze.y) * 0.06;
+
+      // Deep teal ground, as in the reference — not flat black.
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      const bg = ctx.createRadialGradient(
+        canvas.width / 2, canvas.height * 0.42, 0,
+        canvas.width / 2, canvas.height * 0.42, canvas.width * 0.75
+      );
+      bg.addColorStop(0, "#0d2233");
+      bg.addColorStop(0.55, "#081726");
+      bg.addColorStop(1, "#040c15");
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+      const originY = h / 2 + 55 * scale;
+
+      // Halo rings behind the head.
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      for (let i = 0; i < 10; i++) {
+        ctx.beginPath();
+        ctx.strokeStyle = `rgba(0,190,255,${(listening ? 0.3 : speaking ? 0.2 : 0.12) * (1 - i / 10)})`;
+        ctx.lineWidth = 1;
+        ctx.setLineDash([1.5, 10]);
+        ctx.lineDashOffset = (i % 2 ? -t : t) * (14 + i * 3);
+        ctx.arc(w / 2 + gaze.x * 5, originY + HEAD.cy * scale + gaze.y * 3, (170 + i * 23) * scale, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
+      ctx.restore();
+
+      // Particles are written straight into the pixel buffer: ~70k points is
+      // far more than fillRect can push at frame rate, and this also gives
+      // real additive blending for the bloom.
+      const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const buf = img.data;
+      const cw = canvas.width, chh = canvas.height;
+      const ox = (w / 2) * dpr, oy = originY * dpr, sc = scale * dpr;
+
+      const plot = (fx: number, fy: number, r: number, g: number, bl: number, a: number) => {
+        const xi = fx | 0, yi = fy | 0;
+        if (xi < 0 || yi < 0 || xi >= cw || yi >= chh) return;
+        const i = (yi * cw + xi) << 2;
+        buf[i] = Math.min(255, buf[i] + r * a);
+        buf[i + 1] = Math.min(255, buf[i + 1] + g * a);
+        buf[i + 2] = Math.min(255, buf[i + 2] + bl * a);
+      };
+
+      for (const p of particles) {
+        const px = gaze.x * (9 + p.depth * 24);
+        const py = gaze.y * (5 + p.depth * 14);
+
+        const wave = p.core
+          ? Math.sin(p.ty * 0.14 + t * (2 + voice * 4.5) + p.phase) * (0.8 + voice * 4.2)
+          : Math.sin(p.ty * 0.05 + t * 0.6 + p.phase) * 0.45;
+
+        const tx = p.tx + px + wave;
+        const ty = p.ty + py;
+
+        if (reduced) {
+          p.x = tx; p.y = ty;
+        } else {
+          p.vx = (p.vx + (tx - p.x) * 0.09) * 0.78;
+          p.vy = (p.vy + (ty - p.y) * 0.09) * 0.78;
+          p.x += p.vx;
+          p.y += p.vy;
+        }
+
+        const sx = ox + p.x * sc;
+        const sy = oy + p.y * sc;
+        const shimmer = 0.88 + 0.12 * Math.sin(t * 1.6 + p.phase);
+
+        if (p.core) {
+          const d = Math.hypot((p.tx - FACE.cx) / FACE.rx, (p.ty - FACE.cy) / FACE.ry);
+          const g = Math.max(0, 1 - d) * (0.8 + voice * 0.4);
+          const a = Math.min(1, 0.3 + g * 0.8);
+          plot(sx, sy, 255, 165 + g * 70, 35 + g * 55, a);
+          if (g > 0.45) {
+            plot(sx + 1, sy, 255, 175, 55, a * 0.4);
+            plot(sx, sy + 1, 255, 175, 55, a * 0.4);
+          }
+          continue;
+        }
+
+        if (p.gold) {
+          const a = (0.5 + voice * 0.4) * shimmer;
+          plot(sx, sy, 255, 180 + voice * 40, 80, a);
+          plot(sx + 1, sy, 255, 180, 80, a * 0.45);
+          continue;
+        }
+
+        if (p.rim) {
+          // Bloom first, then the hot point on top of it.
+          const a = 0.95 * shimmer;
+          for (let dy = -2; dy <= 2; dy++) {
+            for (let dx = -2; dx <= 2; dx++) {
+              const d2 = dx * dx + dy * dy;
+              if (d2 === 0 || d2 > 5) continue;
+              plot(sx + dx, sy + dy, 70, 200, 255, 0.1 / d2);
+            }
+          }
+          plot(sx, sy, 210, 250, 255, a);
+          plot(sx + 1, sy, 150, 235, 255, a * 0.5);
+          plot(sx, sy + 1, 150, 235, 255, a * 0.5);
+          continue;
+        }
+
+        const a = p.lit * shimmer * 0.85;
+        plot(sx, sy, 40 + p.lit * 70, 190 + p.lit * 55, 230 + p.lit * 25, a);
+      }
+
+      ctx.putImageData(img, 0, 0);
+
+      raf = requestAnimationFrame(draw);
+    };
+    raf = requestAnimationFrame(draw);
+
     return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener("resize", resize);
       window.removeEventListener("mousemove", onMove);
-      if (frame.current != null) cancelAnimationFrame(frame.current);
     };
   }, []);
 
-  const bustShift = `translate(${gaze.x * 11} ${gaze.y * 7})`;
-  const coreShift = `translate(${gaze.x * 21} ${gaze.y * 13})`;
-  const haloShift = `translate(${gaze.x * 4} ${gaze.y * 2.5})`;
-  // A touch of horizontal squash on the far side sells the turn.
-  const turn = `scale(${1 - Math.abs(gaze.x) * 0.045} 1)`;
-  const ease = { transition: "transform .28s cubic-bezier(.22,.7,.3,1)" } as const;
-
-  // Contour slices for the head, and for the neck/shoulders.
-  const headLines = useMemo(() => {
-    const lines: { y: number; w: number }[] = [];
-    for (let y = HEAD.cy - HEAD.ry + 3; y < NECK_TOP + 6; y += 5.5) {
-      const w = headHalfWidth(y);
-      if (w > 2) lines.push({ y, w });
-    }
-    return lines;
-  }, []);
-
-  const bodyLines = useMemo(() => {
-    const lines: { y: number; w: number }[] = [];
-    for (let y = NECK_TOP; y < SHOULDER_END + 20; y += 5.5) lines.push({ y, w: bodyHalfWidth(y) });
-    return lines;
-  }, []);
-
-  /** The glowing rim: head silhouette down into the shoulder line. */
-  const rimPath = useMemo(() => {
-    const left: string[] = [];
-    const right: string[] = [];
-    for (let y = HEAD.cy - HEAD.ry + 2; y < NECK_TOP; y += 4) {
-      const w = headHalfWidth(y);
-      if (w < 2) continue;
-      left.push(`${HEAD.cx - w},${y}`);
-      right.push(`${HEAD.cx + w},${y}`);
-    }
-    for (let y = NECK_TOP; y <= SHOULDER_END + 18; y += 4) {
-      const w = bodyHalfWidth(y);
-      left.push(`${HEAD.cx - w},${y}`);
-      right.push(`${HEAD.cx + w},${y}`);
-    }
-    return { left: `M ${left.join(" L ")}`, right: `M ${right.join(" L ")}` };
-  }, []);
-
-  // Wavy bands inside the face core.
-  const faceBands = useMemo(() => {
-    const bands: { y: number; w: number; i: number }[] = [];
-    let i = 0;
-    for (let y = FACE.cy - FACE.ry + 6; y < FACE.cy + FACE.ry - 4; y += 7) {
-      const t = (y - FACE.cy) / FACE.ry;
-      const w = FACE.rx * Math.sqrt(Math.max(0, 1 - t * t));
-      if (w > 4) bands.push({ y, w, i: i++ });
-    }
-    return bands;
-  }, []);
-
-  const halo = useMemo(
-    () => Array.from({ length: 12 }, (_, i) => 138 + i * 17),
-    []
-  );
-
-  const statusText = speaking
-    ? "STATUS: SPEAKING   INTENSITY: HIGH"
-    : listening
-    ? "STATUS: LISTENING"
-    : state === "thinking"
-    ? "STATUS: PROCESSING"
-    : "STATUS: STANDBY";
+  const statusText =
+    state === "speaking" ? "STATUS: SPEAKING"
+    : state === "listening" ? "STATUS: LISTENING"
+    : state === "thinking" ? "STATUS: PROCESSING"
+    : "STATUS: IDLE";
 
   return (
-    <div
-      style={{
-        position: "fixed", inset: 0, zIndex: 90,
-        background: "radial-gradient(ellipse 80% 70% at 50% 42%, #0b2036 0%, #071523 45%, #04080f 100%)",
-        display: "flex", alignItems: "center", justifyContent: "center",
-      }}
-    >
+    <div style={{ position: "fixed", inset: 0, zIndex: 90, background: "#04080f" }}>
+      <canvas
+        ref={canvasRef}
+        role="img"
+        aria-label={`Imex — ${statusText.toLowerCase()}`}
+        style={{ width: "100%", height: "100%", display: "block" }}
+      />
+
       <button
         onClick={onClose}
         aria-label="Close face view"
@@ -183,195 +357,16 @@ export default function ImexFace({
         EXIT
       </button>
 
-      <svg
-        viewBox={`0 0 ${VB_W} ${VB_H}`}
-        role="img"
-        aria-label={`Imex — ${statusText.toLowerCase()}`}
+      <div
+        aria-live="polite"
         style={{
-          width: "min(100%, 720px)", height: "100%", display: "block",
-          // The bust gathers itself out of the dark rather than snapping in.
-          animation: "imexAssemble 1.15s cubic-bezier(.16,.9,.3,1) both",
+          position: "absolute", top: "58%", right: "clamp(18px,7vw,120px)", zIndex: 95,
+          fontFamily: "var(--font-mono)", fontSize: 10.5, letterSpacing: "0.22em",
+          color: "rgba(0,229,255,0.72)", pointerEvents: "none", whiteSpace: "pre",
         }}
       >
-        {/* Sized down inside the frame so the halo and motes have room. */}
-        <g transform="translate(300 330) scale(.8) translate(-300 -330)">
-        <defs>
-          <radialGradient id="imexFaceCore" cx="50%" cy="52%" r="52%">
-            <stop offset="0%" stopColor={GOLD_HOT} stopOpacity="0.98" />
-            <stop offset="42%" stopColor={GOLD} stopOpacity="0.82" />
-            <stop offset="78%" stopColor="#e2571b" stopOpacity="0.42" />
-            <stop offset="100%" stopColor="#c03a10" stopOpacity="0" />
-          </radialGradient>
-
-          <linearGradient id="imexEdge" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={CYAN_SOFT} stopOpacity="0.95" />
-            <stop offset="55%" stopColor={CYAN} stopOpacity="0.8" />
-            <stop offset="100%" stopColor={CYAN} stopOpacity="0.25" />
-          </linearGradient>
-
-          <filter id="imexGlow" x="-60%" y="-60%" width="220%" height="220%">
-            <feGaussianBlur stdDeviation="5" result="b" />
-            <feMerge>
-              <feMergeNode in="b" />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
-
-          <filter id="imexCoreGlow" x="-80%" y="-80%" width="260%" height="260%">
-            <feGaussianBlur stdDeviation="11" />
-          </filter>
-
-          <clipPath id="imexFaceClip">
-            <ellipse cx={FACE.cx} cy={FACE.cy} rx={FACE.rx} ry={FACE.ry} />
-          </clipPath>
-        </defs>
-
-        {/* halo — concentric rings behind the head, brightest while listening */}
-        <g transform={haloShift} opacity={listening ? 0.8 : speaking ? 0.5 : 0.34} style={{ ...ease, transition: "opacity .6s ease, transform .28s cubic-bezier(.22,.7,.3,1)" }}>
-          {halo.map((r, i) => (
-            <circle
-              key={r}
-              cx={HEAD.cx}
-              cy={HEAD.cy + 6}
-              r={r}
-              fill="none"
-              stroke={CYAN}
-              strokeWidth={i % 3 === 0 ? 1.1 : 0.6}
-              strokeOpacity={0.62 - i * 0.03}
-              strokeDasharray={i % 2 === 0 ? "1.5 7" : "1 11"}
-              style={{
-                transformOrigin: `${HEAD.cx}px ${HEAD.cy + 6}px`,
-                animation: `imexHalo ${16 + i * 1.6}s linear infinite${i % 2 ? " reverse" : ""}`,
-              }}
-            />
-          ))}
-        </g>
-
-        {/* motes rising off the crown */}
-        <g transform={bustShift} style={ease} fill={CYAN_SOFT} opacity="0.75">
-          {Array.from({ length: 30 }, (_, i) => {
-            const a = -Math.PI / 2 + (i / 29 - 0.5) * 1.75;
-            const spread = 14 + (i % 5) * 13;
-            return (
-              <circle
-                key={i}
-                cx={HEAD.cx + Math.cos(a) * (HEAD.rx * 0.82)}
-                cy={HEAD.cy + Math.sin(a) * (HEAD.ry + spread)}
-                r={i % 4 === 0 ? 1.7 : 1}
-                opacity={0.25 + ((i * 7) % 10) / 14}
-                style={{ animation: `imexMote ${2.4 + (i % 7) * 0.42}s ease-in-out ${(i % 9) * 0.21}s infinite alternate` }}
-              />
-            );
-          })}
-        </g>
-
-        {/* head + body contour slices — each drifts into place on open */}
-        <g transform={bustShift} style={ease} filter="url(#imexGlow)">
-          {headLines.map(({ y, w }, i) => (
-            <path
-              key={`h${i}`}
-              d={`M ${HEAD.cx - w} ${y} Q ${HEAD.cx} ${y - 5} ${HEAD.cx + w} ${y}`}
-              fill="none"
-              stroke="url(#imexEdge)"
-              strokeWidth={i % 4 === 0 ? 1.5 : 0.9}
-              strokeOpacity={0.42 + (i % 3) * 0.14}
-              strokeLinecap="round"
-              style={{
-                transformOrigin: `${HEAD.cx}px ${y}px`,
-                animation: `imexSlice .9s cubic-bezier(.16,.9,.3,1) ${(i % 11) * 0.045}s both`,
-              }}
-            />
-          ))}
-
-          {bodyLines.map(({ y, w }, i) => (
-            <path
-              key={`b${i}`}
-              d={`M ${HEAD.cx - w} ${y} Q ${HEAD.cx} ${y - 11} ${HEAD.cx + w} ${y}`}
-              fill="none"
-              stroke={CYAN}
-              strokeWidth={i % 4 === 0 ? 1.3 : 0.75}
-              strokeOpacity={Math.max(0.05, 0.34 - i * 0.006)}
-              strokeLinecap="round"
-              style={{
-                transformOrigin: `${HEAD.cx}px ${y}px`,
-                animation: `imexSlice .9s cubic-bezier(.16,.9,.3,1) ${0.12 + (i % 13) * 0.04}s both`,
-              }}
-            />
-          ))}
-        </g>
-
-        {/* the lit rim, tracing head into shoulders */}
-        <g transform={bustShift} style={ease} fill="none" stroke={CYAN_SOFT} strokeWidth="2.4" strokeOpacity="0.92" strokeLinecap="round" filter="url(#imexGlow)">
-          <path d={rimPath.left} />
-          <path d={rimPath.right} />
-        </g>
-
-        {/* throat channels — warm filaments branching up into the face */}
-        <g transform={bustShift} stroke={GOLD} fill="none" strokeLinecap="round"
-           opacity={speaking ? 0.95 : 0.5} style={{ transition: "opacity .4s, transform .28s cubic-bezier(.22,.7,.3,1)" }} filter="url(#imexGlow)">
-          <path d={`M ${HEAD.cx} 346 C ${HEAD.cx} 400 ${HEAD.cx - 3} 430 ${HEAD.cx} 470`} strokeWidth="2" strokeOpacity="0.85" />
-          <path d={`M ${HEAD.cx - 14} 356 C ${HEAD.cx - 22} 398 ${HEAD.cx - 24} 420 ${HEAD.cx - 20} 452`} strokeWidth="1.4" strokeOpacity="0.55" />
-          <path d={`M ${HEAD.cx + 14} 356 C ${HEAD.cx + 22} 398 ${HEAD.cx + 24} 420 ${HEAD.cx + 20} 452`} strokeWidth="1.4" strokeOpacity="0.55" />
-          <path d={`M ${HEAD.cx - 20} 452 L ${HEAD.cx - 12} 486`} strokeWidth="1.1" strokeOpacity="0.4" />
-          <path d={`M ${HEAD.cx + 20} 452 L ${HEAD.cx + 12} 486`} strokeWidth="1.1" strokeOpacity="0.4" />
-        </g>
-
-        {/* the face core — leads the turn */}
-        <g transform={`${coreShift} ${turn}`} style={{ ...ease, transformOrigin: `${FACE.cx}px ${FACE.cy}px` }}>
-          <ellipse
-            cx={FACE.cx} cy={FACE.cy} rx={FACE.rx * 1.3} ry={FACE.ry * 1.25}
-            fill="url(#imexFaceCore)" opacity={speaking ? 0.62 : 0.4}
-            filter="url(#imexCoreGlow)"
-            style={{ transition: "opacity .45s ease" }}
-          />
-          <ellipse cx={FACE.cx} cy={FACE.cy} rx={FACE.rx} ry={FACE.ry} fill="url(#imexFaceCore)" opacity="0.9" />
-
-          {/* the bands that ripple while Imex talks */}
-          <g clipPath="url(#imexFaceClip)">
-            {faceBands.map(({ y, w, i }) => (
-              <path
-                key={`f${i}`}
-                d={`M ${FACE.cx - w - 8} ${y}
-                    q ${(w + 8) / 2} ${-5.5} ${w + 8} 0
-                    q ${(w + 8) / 2} ${5.5} ${w + 8} 0`}
-                fill="none"
-                stroke={i % 3 === 0 ? GOLD_HOT : "#ffd27a"}
-                strokeWidth={i % 3 === 0 ? 2 : 1.3}
-                strokeOpacity={0.55 + (i % 4) * 0.12}
-                strokeLinecap="round"
-                style={{
-                  transformOrigin: `${FACE.cx}px ${y}px`,
-                  animation: `${speaking ? "imexBandTalk" : "imexBandIdle"} ${
-                    (speaking ? 0.5 : 2.6) + (i % 5) * (speaking ? 0.07 : 0.22)
-                  }s ease-in-out ${(i % 6) * 0.06}s infinite alternate`,
-                }}
-              />
-            ))}
-          </g>
-        </g>
-
-        </g>
-
-        <text
-          x={VB_W - 26} y={392} textAnchor="end"
-          fill={CYAN} fillOpacity="0.75" fontSize="11"
-          fontFamily="var(--font-mono), monospace" letterSpacing="1.6"
-        >
-          {statusText}
-        </text>
-
-        <style>{`
-          @keyframes imexAssemble { from { opacity: 0; transform: scale(1.035) } to { opacity: 1; transform: none } }
-          @keyframes imexSlice { from { opacity: 0; transform: scaleX(.24) } to { opacity: 1; transform: none } }
-          @keyframes imexHalo { to { transform: rotate(360deg) } }
-          @keyframes imexMote { from { opacity: .15; transform: translateY(3px) } to { opacity: .85; transform: translateY(-7px) } }
-          @keyframes imexBandIdle { from { transform: scaleX(.97) } to { transform: scaleX(1.03) } }
-          @keyframes imexBandTalk { from { transform: scaleX(.82) translateY(1px) } to { transform: scaleX(1.16) translateY(-1px) } }
-          @media (prefers-reduced-motion: reduce) {
-            circle, path { animation: none !important }
-          }
-        `}</style>
-      </svg>
+        {statusText}
+      </div>
     </div>
   );
 }
