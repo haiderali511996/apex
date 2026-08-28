@@ -18,6 +18,17 @@ import OrbStatusBar from "./OrbStatusBar";
 import { useApexVoice } from "@/lib/useApexVoice";
 import ApexCaptions from "./ApexCaptions";
 import VoicePicker from "./VoicePicker";
+import ImexFace from "./ImexFace";
+
+/** Phrases that summon or dismiss the face, matched before the agent sees them. */
+function faceCommand(text: string): "show" | "hide" | null {
+  const t = text.toLowerCase().replace(/[.,!?]/g, " ").replace(/\s+/g, " ").trim();
+  if (/\b(hide|close|dismiss)\b.*\b(face|yourself)\b/.test(t)) return "hide";
+  if (/\b(show|see|reveal)\b.*\b(your|the|imex)?\s*face\b/.test(t)) return "show";
+  if (/\b(what|how)\b.*\byou\b.*\blook\b/.test(t)) return "show";
+  if (/\blet me see you\b|\bshow yourself\b/.test(t)) return "show";
+  return null;
+}
 
 export type NodeSel = { name: string; key: string; color: string };
 
@@ -267,7 +278,22 @@ export default function ApexWorld() {
     }
   };
   const [voicePickerOpen, setVoicePickerOpen] = useState(false);
-  const voice = useApexVoice({ wakeWord });
+  const [faceOpen, setFaceOpen] = useState(false);
+  const voice = useApexVoice({
+    wakeWord,
+    onLocalCommand: (text) => {
+      const cmd = faceCommand(text);
+      if (cmd === "show") {
+        setFaceOpen(true);
+        return "Here I am, Haider.";
+      }
+      if (cmd === "hide") {
+        setFaceOpen(false);
+        return "Back to the graph.";
+      }
+      return null;
+    },
+  });
   const orbState: OrbState =
     voice.state === "speaking" ? "speaking" : voice.state === "idle" ? "idle" : "thinking";
 
@@ -516,6 +542,10 @@ export default function ApexWorld() {
       )}
 
       {selected && <AgentOverview sel={selected} onClose={() => setSelected(null)} />}
+
+      {/* The face sits over everything; the voice loop keeps running behind it
+          so the conversation continues while it's open. */}
+      {faceOpen && <ImexFace state={voice.state} onClose={() => setFaceOpen(false)} />}
     </div>
   );
 }
