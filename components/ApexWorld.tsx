@@ -240,9 +240,32 @@ export default function ApexWorld() {
 
   // Tapping the core runs the real voice loop: listen → ask the agent → speak
   // the answer. The orb's animation state is driven by that, not simulated.
-  // Wake word stays off until asked for: an always-on mic is the user's call,
-  // and Chrome won't grant one without a gesture anyway.
+  /**
+   * Hands-free is on by default and starts itself on load, so "Hello Imex"
+   * works without tapping anything first. Two caveats it has to survive:
+   * the browser only grants the mic once the visitor has allowed it for this
+   * origin (the first visit still needs one click to trigger the prompt), and
+   * a visitor who switches it off should stay switched off.
+   */
   const [wakeWord, setWakeWord] = useState(false);
+  useEffect(() => {
+    let wanted = true;
+    try {
+      wanted = window.localStorage.getItem("imex.handsfree") !== "off";
+    } catch {
+      // private mode — fall back to on
+    }
+    setWakeWord(wanted);
+  }, []);
+
+  const setHandsFree = (on: boolean) => {
+    setWakeWord(on);
+    try {
+      window.localStorage.setItem("imex.handsfree", on ? "on" : "off");
+    } catch {
+      // preference just won't persist
+    }
+  };
   const [voicePickerOpen, setVoicePickerOpen] = useState(false);
   const voice = useApexVoice({ wakeWord });
   const orbState: OrbState =
@@ -370,7 +393,7 @@ export default function ApexWorld() {
         {/* Off by default — an always-on mic is opt-in. */}
         <button
           type="button"
-          onClick={() => setWakeWord((v) => !v)}
+          onClick={() => setHandsFree(!wakeWord)}
           aria-pressed={wakeWord}
           style={{
             fontFamily: "var(--font-mono)", fontSize: "0.62rem", letterSpacing: "0.2em",

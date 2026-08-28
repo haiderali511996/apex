@@ -116,6 +116,34 @@ export default function VoicePicker({ onClose }: { onClose: () => void }) {
         })}
       </div>
 
+      {/* Proves whether audio works at all, independent of which voice is
+          chosen — the browser's default is the most likely one to speak. */}
+      <div style={{ padding: "9px 14px", borderTop: `1px solid ${ACCENT}22`, display: "flex", alignItems: "center", gap: 10 }}>
+        <button
+          type="button"
+          onClick={() => {
+            setStatus({ kind: "playing", text: "Testing the browser's default voice…" });
+            speakText("Sound check. If you can hear this, audio is working.", null, {
+              onStart: () => setStatus({ kind: "playing", text: "Playing…" }),
+              onEnd: () => setStatus({ kind: "ok", text: "Sound works. If a named voice above stays silent, use this default instead." }),
+              onError: () =>
+                setStatus({
+                  kind: "error",
+                  text: "No audio at all. The tab may be muted (right-click the tab → Unmute), or your Mac's output volume or output device needs checking.",
+                }),
+            });
+          }}
+          style={{
+            background: "transparent", border: `1px solid ${ACCENT}55`, borderRadius: 8,
+            padding: "6px 12px", fontSize: 11, cursor: "pointer", color: ACCENT,
+            fontFamily: "var(--font-mono)", letterSpacing: "0.14em",
+          }}
+        >
+          TEST SOUND
+        </button>
+        <span style={{ fontSize: 10.5, color: "rgba(240,237,232,0.4)" }}>uses the browser default</span>
+      </div>
+
       {status && (
         <div style={{
           padding: "9px 14px", borderTop: `1px solid ${ACCENT}22`, fontSize: 11, lineHeight: 1.5,

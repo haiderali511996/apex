@@ -123,8 +123,12 @@ function matchWake(transcript: string): string | null {
  * The single voice + chat loop shared by the orb and the chat panel, so both
  * drive the same conversation rather than keeping two rival copies of it.
  */
-export function useApexVoice(options: { speak?: boolean; wakeWord?: boolean } = {}) {
+export function useApexVoice(options: { speak?: boolean; wakeWord?: boolean; continuous?: boolean } = {}) {
   const speakEnabled = options.speak ?? true;
+  // After a reply finishes, open the mic again so a follow-up needs no tap.
+  const continuous = options.continuous ?? true;
+  const continuousRef = useRef(continuous);
+  continuousRef.current = continuous;
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [state, setState] = useState<VoiceState>("idle");
@@ -145,6 +149,9 @@ export function useApexVoice(options: { speak?: boolean; wakeWord?: boolean } = 
   // The send loop reads history through a ref so a reply can't race a stale copy.
   const messagesRef = useRef<ChatMessage[]>([]);
   messagesRef.current = messages;
+  // send() re-opens the mic once a reply finishes, but startListening() is
+  // defined in terms of send(). A ref breaks that cycle.
+  const startListeningRef = useRef<() => void>(() => {});
 
   /**
    * The reply is revealed in step with the voice rather than dumped at once.
@@ -248,7 +255,15 @@ export function useApexVoice(options: { speak?: boolean; wakeWord?: boolean } = 
       }
 
       setState("speaking");
-      speak(reply, () => setState("idle"));
+      speak(reply, () => {
+        setState("idle");
+        // Hand the mic straight back so the next command needs no tap. The
+        // short pause keeps the recognizer from catching the tail of the
+        // reply through the speakers.
+        if (continuousRef.current && !data.error) {
+          setTimeout(() => startListeningRef.current(), 450);
+        }
+      });
     },
     [speak]
   );
@@ -279,9 +294,15 @@ export function useApexVoice(options: { speak?: boolean; wakeWord?: boolean } = 
     };
     recognition.onerror = (e) => {
       recognitionRef.current = null;
+      // Silence after a reply is the normal end of a hands-free exchange, not
+      // a failure — drop back to the wake word without scolding the user.
+      if (e.error === "no-speech" && continuousRef.current) {
+        setState("idle");
+        return;
+      }
       setError(
         e.error === "not-allowed"
-          ? "Microphone access was blocked. Allow it in your browser's site settings, then tap again."
+          ? "Microphone access was blocked. Allow it in your browser's site settings, then reload."
           : e.error === "no-speech"
           ? "I didn't catch anything — tap and try again."
           : "Voice input failed. Check your microphone and try again."
@@ -304,6 +325,8 @@ export function useApexVoice(options: { speak?: boolean; wakeWord?: boolean } = 
       setState("idle");
     }
   }, [send]);
+
+  startListeningRef.current = startListening;
 
   /** Cuts the voice off mid-sentence and settles the caption where it stopped. */
   const stopSpeaking = useCallback(() => {
@@ -331,7 +354,7 @@ export function useApexVoice(options: { speak?: boolean; wakeWord?: boolean } = 
    * Background listener for the wake phrase. It runs its own recognizer in
    * interim mode and restarts itself whenever the browser ends the session
    * (Chrome stops it every ~60s, and on every result), so saying
-   * "Hello Apex" works without touching anything.
+   * "Hello Imex" works without touching anything.
    */
   const stopWakeWord = useCallback(() => {
     wakeWantedRef.current = false;
