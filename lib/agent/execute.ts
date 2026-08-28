@@ -1,4 +1,4 @@
-import { meta, x, tiktok } from "./connectors";
+import { meta, x, tiktok, workspace } from "./connectors";
 import { appendActionLog } from "./store";
 import type { PendingAction } from "./types";
 
@@ -18,6 +18,14 @@ export async function runPendingAction(action: PendingAction): Promise<string> {
         break;
       case "tiktok_post":
         result = await tiktok.publishTiktokVideo(action.payload as { videoUrl: string; caption: string });
+        break;
+      case "send_email":
+        result = await workspace.sendEmail(action.payload as { to: string; subject: string; body: string });
+        break;
+      case "create_event":
+        result = await workspace.createCalendarEvent(
+          action.payload as { summary: string; startIso: string; endIso: string; description?: string; attendees?: string[] }
+        );
         break;
       default:
         throw new Error(`Unknown action kind: ${action.kind}`);

@@ -11,13 +11,16 @@ const STATE_FILE = path.join(DATA_DIR, "agent-state.json");
 
 type TikTokTokens = { accessToken: string; refreshToken: string; expiresAt: number };
 
+export type MemoryFact = { id: string; topic: string; fact: string; at: string };
+
 type State = {
   pendingActions: PendingAction[];
   actionLog: ActionLogEntry[];
   tiktokTokens?: TikTokTokens;
+  memory: MemoryFact[];
 };
 
-const EMPTY_STATE: State = { pendingActions: [], actionLog: [] };
+const EMPTY_STATE: State = { pendingActions: [], actionLog: [], memory: [] };
 
 // Serializes read-modify-write cycles within this process so concurrent
 // requests can't clobber each other's writes.
@@ -96,6 +99,38 @@ export function appendActionLog(entry: Omit<ActionLogEntry, "id" | "at">): Promi
 
 export function listActionLog(limit = 20): Promise<ActionLogEntry[]> {
   return serialize(async () => (await readState()).actionLog.slice(0, limit));
+}
+
+export function rememberFact(topic: string, fact: string): Promise<MemoryFact> {
+  return serialize(async () => {
+    const state = await readState();
+    state.memory = state.memory ?? [];
+    const entry: MemoryFact = { id: randomUUID(), topic, fact, at: new Date().toISOString() };
+    state.memory.unshift(entry);
+    await writeState(state);
+    return entry;
+  });
+}
+
+export function recallFacts(query?: string, limit = 25): Promise<MemoryFact[]> {
+  return serialize(async () => {
+    const memory = (await readState()).memory ?? [];
+    if (!query) return memory.slice(0, limit);
+    const q = query.toLowerCase();
+    return memory
+      .filter((m) => m.topic.toLowerCase().includes(q) || m.fact.toLowerCase().includes(q))
+      .slice(0, limit);
+  });
+}
+
+export function forgetFact(id: string): Promise<boolean> {
+  return serialize(async () => {
+    const state = await readState();
+    const before = (state.memory ?? []).length;
+    state.memory = (state.memory ?? []).filter((m) => m.id !== id);
+    await writeState(state);
+    return state.memory.length < before;
+  });
 }
 
 // TikTok's OAuth2 refresh tokens rotate on every use, so the current pair
