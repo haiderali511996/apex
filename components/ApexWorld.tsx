@@ -102,7 +102,7 @@ export const INFO: Record<string, AgentInfo> = {
     caps: ["Background removal and replacement", "Text overlays", "Resize for social media", "Filters and enhancement"],
     asks: ["Remove background", "Resize for IG"] },
   developer: { role: "Keeper of the build log", status: "standby",
-    caps: ["Keeps Apex's development log", "Recaps what shipped - day / week / month", "Future: builds Apex itself"],
+    caps: ["Keeps Imex's development log", "Recaps what shipped - day / week / month", "Future: builds Imex itself"],
     asks: ["Recap last week"] },
   analytics: { role: "Numbers feed", status: "integration",
     caps: ["Performance metrics across every channel", "Feeds the weekly reviews"] },
@@ -117,7 +117,7 @@ export const INFO: Record<string, AgentInfo> = {
 };
 
 const STATUS_LINE: Record<AgentInfo["status"], { color: string; text: string }> = {
-  online: { color: "#34d399", text: "Online - Apex routes work to it automatically" },
+  online: { color: "#34d399", text: "Online - Imex routes work to it automatically" },
   standby: { color: "#c9a84c", text: "Standby - in active development" },
   integration: { color: "#7f9bb3", text: "Integration - wired into the core" },
 };
@@ -126,7 +126,7 @@ const STATUS_LINE: Record<AgentInfo["status"], { color: string; text: string }> 
 export function AgentOverview({ sel, onClose }: { sel: NodeSel; onClose: () => void }) {
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
   const dragRef = useRef<{ sx: number; sy: number } | null>(null);
-  const info = INFO[sel.key] ?? { role: "Specialist", status: "online" as const, caps: ["Part of the Apex core"] };
+  const info = INFO[sel.key] ?? { role: "Specialist", status: "online" as const, caps: ["Part of the Imex core"] };
   const c = sel.color;
   const status = STATUS_LINE[info.status];
 
@@ -252,6 +252,8 @@ export default function ApexWorld() {
   // it's done (or muted), the whole reply stands.
   const lastReply = [...voice.messages].reverse().find((m) => m.role === "assistant")?.content ?? "";
   const transcript = voice.spokenSoFar || (voice.stillSpeaking ? "" : lastReply);
+  // What Imex heard from you — shown so you can check it caught the words right.
+  const lastAsk = [...voice.messages].reverse().find((m) => m.role === "user")?.content ?? "";
 
   // Single entry point for opening an agent, shared by the SVG graph and the
   // hidden accessible list, so both routes behave identically.
@@ -317,7 +319,7 @@ export default function ApexWorld() {
       </div>
 
       {/* Keyboard and screen-reader equivalent of the agent graph. */}
-      <nav className="visually-hidden" aria-label="Apex agents">
+      <nav className="visually-hidden" aria-label="Imex agents">
         <ul>
           {ROSTER.map((a) => (
             <li key={a.key}>
@@ -340,10 +342,10 @@ export default function ApexWorld() {
         role="button"
         tabIndex={0}
         aria-label={
-          voice.state === "listening" ? "Apex is listening - tap to stop"
-          : voice.state === "thinking" ? "Apex is thinking"
-          : voice.state === "speaking" ? "Apex is speaking - tap to stop"
-          : "Apex core - tap and speak to it"
+          voice.state === "listening" ? "Imex is listening - tap to stop"
+          : voice.state === "thinking" ? "Imex is thinking"
+          : voice.state === "speaking" ? "Imex is speaking - tap to stop"
+          : "Imex core - tap and speak to it"
         }
         onClick={voice.toggle}
         onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); voice.toggle(); } }}
@@ -379,7 +381,7 @@ export default function ApexWorld() {
             borderRadius: 20, padding: "7px 15px", backdropFilter: "blur(6px)",
           }}
         >
-          {wakeWord ? "● Hands-free on" : 'Say "Hello Apex"'}
+          {wakeWord ? "● Hands-free on" : 'Say "Hello Imex"'}
         </button>
 
         <button
@@ -401,15 +403,45 @@ export default function ApexWorld() {
 
       {voicePickerOpen && <VoicePicker onClose={() => setVoicePickerOpen(false)} />}
 
+      {/* Your side of the conversation, so you can see what was actually
+          heard — speech recognition mishears, and a wrong word explains a
+          strange answer. */}
+      {!voicePickerOpen && (lastAsk || voice.state === "listening") && (
+        <div
+          aria-live="polite"
+          style={{
+            position: "absolute", top: 190, right: "clamp(16px,3vw,40px)", zIndex: 30,
+            width: "min(300px, 26vw)", textAlign: "right", pointerEvents: "none",
+          }}
+        >
+          <div style={{
+            fontFamily: "var(--font-mono)", fontSize: 9, letterSpacing: "0.3em",
+            color: voice.state === "listening" ? "#f5a623" : "rgba(240,237,232,0.35)",
+            marginBottom: 7,
+          }}>
+            {voice.state === "listening" ? "LISTENING…" : "YOU SAID"}
+          </div>
+          {lastAsk && (
+            <div style={{
+              fontSize: 13.5, lineHeight: 1.5, color: "rgba(240,237,232,0.72)",
+            }}>
+              “{lastAsk}”
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Apex's side of the conversation, written into the same HUD as the
           clock: the text is revealed in step with the voice, so it reads as
           Apex talking rather than a block of text dropped in at the end. */}
+      {/* Errors and the listening cue share the captions' column so nothing
+          ever lands on top of the agent graph. */}
       {voice.error ? (
         <div
           aria-live="polite"
           style={{
-            position: "absolute", left: "clamp(24px, 6vw, 90px)", bottom: "clamp(90px, 16vh, 190px)",
-            width: "min(560px, 60vw)", zIndex: 20, fontSize: 14.5, lineHeight: 1.55, color: "#ffb4a2",
+            position: "absolute", left: "clamp(18px, 2.5vw, 34px)", top: 168,
+            width: "min(330px, 27vw)", zIndex: 20, fontSize: 13.5, lineHeight: 1.55, color: "#ffb4a2",
           }}
         >
           {voice.error}
@@ -418,7 +450,7 @@ export default function ApexWorld() {
         <div
           aria-live="polite"
           style={{
-            position: "absolute", left: "clamp(24px, 6vw, 90px)", bottom: "clamp(90px, 16vh, 190px)",
+            position: "absolute", left: "clamp(18px, 2.5vw, 34px)", top: 168,
             zIndex: 20, fontFamily: "var(--font-mono)", fontSize: 12,
             letterSpacing: "0.3em", color: "#f5a623",
           }}

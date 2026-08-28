@@ -7,7 +7,7 @@ import { useApexVoice } from "@/lib/useApexVoice";
 const ACCENT = "#00e5ff";
 
 const GREETING =
-  "Hey — I'm Apex. Ask me for a report across your accounts, or tell me what to post and I'll draft it for your approval.";
+  "Hey — I'm Imex. Ask me for a report across your accounts, or tell me what to post and I'll draft it for your approval.";
 
 export default function AgentChat() {
   const [speakEnabled, setSpeakEnabled] = useState(true);
@@ -58,7 +58,7 @@ export default function AgentChat() {
           </div>
         ))}
 
-        {voice.state === "thinking" && <div style={{ fontSize: 13, color: "rgba(240,237,232,0.5)" }}>Apex is thinking…</div>}
+        {voice.state === "thinking" && <div style={{ fontSize: 13, color: "rgba(240,237,232,0.5)" }}>Imex is thinking…</div>}
         {listening && <div style={{ fontSize: 13, color: "#f5a623", letterSpacing: "0.1em" }}>Listening…</div>}
         {voice.error && <div style={{ fontSize: 13, color: "#ffb4a2" }}>{voice.error}</div>}
 
@@ -108,7 +108,7 @@ export default function AgentChat() {
         </button>
         <button
           onClick={voice.toggle}
-          title={listening ? "Stop listening" : "Talk to Apex"}
+          title={listening ? "Stop listening" : "Talk to Imex"}
           style={{ background: listening ? ACCENT : "transparent", border: `1px solid ${listening ? ACCENT : "rgba(255,255,255,0.2)"}`, borderRadius: 10, width: 40, color: listening ? "#04080f" : "#f0ede8", cursor: "pointer" }}
         >
           {listening ? <MicOff size={16} style={{ margin: "auto" }} /> : <Mic size={16} style={{ margin: "auto" }} />}

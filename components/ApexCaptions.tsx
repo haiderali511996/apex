@@ -59,22 +59,25 @@ export default function ApexCaptions({
   const active = phrases[activeIndex];
 
   return (
+    // Upper-left: the widest genuinely empty column on the page. The orb owns
+    // the middle and the agent labels start around a third of the way across,
+    // so the captions stay narrow and high to keep off both.
     <div
       aria-live="polite"
       style={{
-        position: "absolute", left: "clamp(24px, 6vw, 90px)", bottom: "clamp(90px, 16vh, 190px)",
-        width: "min(620px, 62vw)", zIndex: 20, pointerEvents: "none",
+        position: "absolute", left: "clamp(18px, 2.5vw, 34px)", top: 168,
+        width: "min(330px, 27vw)", zIndex: 20, pointerEvents: "none",
       }}
     >
       {previous.map((phrase, i) => (
         <div
           key={`${phrase}-${i}`}
           style={{
-            fontSize: "clamp(15px, 1.7vw, 21px)",
-            lineHeight: 1.35,
+            fontSize: "clamp(12px, 1.05vw, 15px)",
+            lineHeight: 1.4,
             // The older of the two sits further back.
             color: `rgba(240,237,232,${i === previous.length - 1 ? 0.42 : 0.24})`,
-            marginBottom: 4,
+            marginBottom: 3,
           }}
         >
           {phrase}
@@ -83,23 +86,23 @@ export default function ApexCaptions({
 
       <div
         style={{
-          fontSize: "clamp(24px, 3.1vw, 40px)",
-          lineHeight: 1.22,
+          fontSize: "clamp(17px, 1.65vw, 24px)",
+          lineHeight: 1.28,
           color: CREAM,
           textShadow: `0 0 26px ${CREAM}44, 0 0 60px ${ACCENT}22`,
-          marginTop: 6,
+          marginTop: 5,
         }}
       >
         {active}
       </div>
 
-      <div style={{ display: "flex", alignItems: "center", gap: 14, marginTop: 26, pointerEvents: "auto" }}>
-        <div style={{ display: "flex", gap: 9 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 18, flexWrap: "wrap", pointerEvents: "auto" }}>
+        <div style={{ display: "flex", gap: 7 }}>
           {phrases.slice(0, 8).map((_, i) => (
             <span
               key={i}
               style={{
-                width: 7, height: 7, borderRadius: "50%",
+                width: 6, height: 6, borderRadius: "50%",
                 background: i === Math.min(activeIndex, 7) ? "#f5a623" : `${ACCENT}66`,
                 boxShadow: i === Math.min(activeIndex, 7) ? "0 0 10px #f5a623" : "none",
                 transition: "background .25s",
