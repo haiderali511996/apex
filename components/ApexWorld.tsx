@@ -236,7 +236,10 @@ export default function ApexWorld() {
 
   // Tapping the core runs the real voice loop: listen → ask the agent → speak
   // the answer. The orb's animation state is driven by that, not simulated.
-  const voice = useApexVoice();
+  // Wake word stays off until asked for: an always-on mic is the user's call,
+  // and Chrome won't grant one without a gesture anyway.
+  const [wakeWord, setWakeWord] = useState(false);
+  const voice = useApexVoice({ wakeWord });
   const orbState: OrbState =
     voice.state === "speaking" ? "speaking" : voice.state === "idle" ? "idle" : "thinking";
 
@@ -346,6 +349,24 @@ export default function ApexWorld() {
 
       {/* equalizer + STANDBY cluster - shows LISTENING / PROCESSING / SPEAKING */}
       <OrbStatusBar state={voice.state} />
+
+      {/* Hands-free toggle. Off by default — an always-on mic is opt-in. */}
+      <button
+        type="button"
+        onClick={() => setWakeWord((v) => !v)}
+        aria-pressed={wakeWord}
+        style={{
+          position: "absolute", top: 16, left: "clamp(16px,3vw,40px)", zIndex: 40,
+          fontFamily: "var(--font-mono)", fontSize: "0.62rem", letterSpacing: "0.2em",
+          textTransform: "uppercase", cursor: "pointer",
+          color: wakeWord ? "#04080f" : "rgba(240,237,232,0.7)",
+          background: wakeWord ? "#f5a623" : "rgba(4,8,15,0.5)",
+          border: `1px solid ${wakeWord ? "#f5a623" : "rgba(240,237,232,0.2)"}`,
+          borderRadius: 20, padding: "7px 15px", backdropFilter: "blur(6px)",
+        }}
+      >
+        {wakeWord ? "● Hands-free on" : 'Say "Hello Apex"'}
+      </button>
 
       {/* What Apex just heard and said, so the conversation is readable and not
           only audible (and so it still works with the speakers muted). */}
