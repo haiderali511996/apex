@@ -8,7 +8,7 @@ agent nodes orbit the core, and clicking any node opens an overview card. The or
 agent graph and status bar are **hand-written SVG / CSS**; the cyan particle core is a
 small `react-three-fiber` scene (skipped under `prefers-reduced-motion`); and the WebGL
 shader backdrop + the overview lamp panel are **MIT community components from
-[21st.dev](https://21st.dev/community/components)** (see [CREDITS](./CREDITS.md)).
+[21st.dev](#)** (see [CREDITS](#)).
 
 > Built with Next.js 15 + React 19. Runtime deps: `lucide-react` (icons) and
 > `three` / `@react-three/fiber` / `@react-three/postprocessing` (the particle core) —
@@ -36,7 +36,7 @@ Then `npm run build` for a production build, or deploy to Vercel in one click.
 | `ShaderBackground` | Animated WebGL "plasma waves" backdrop (MIT component from 21st.dev — see CREDITS) |
 | `ApexWorld` | Composes the above; owns the tap-state cycle and the agent overview cards |
 | `ApexOverviewPanel` | Top-left HUD: live clock, weather, and social links |
-| `app/api/weather` | Keyless [open-meteo](https://open-meteo.com) proxy for the panel's weather |
+| `app/api/weather` | Keyless [open-meteo](#) proxy for the panel's weather |
 
 ## Customise
 
@@ -59,7 +59,7 @@ left out. The orb stays fully interactive without them.
 
 ## License
 
-Code is released under the **[MIT License](./LICENSE)** — use it, fork it, ship it.
+Code is released under the **[MIT License](#)** — use it, fork it, ship it.
 
 The **name "Apex" and the Haider Ali branding are not part of this license.**
 If you build on this, please use your own product name and branding.
