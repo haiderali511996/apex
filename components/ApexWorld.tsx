@@ -15,6 +15,7 @@ import ApexHeroOrb, { type OrbState } from "./ApexHeroOrb";
 import ReasoningWebJs from "./ReasoningWeb";
 import ShaderBackgroundJs from "./ShaderBackground";
 import OrbStatusBar from "./OrbStatusBar";
+import { useApexVoice } from "@/lib/useApexVoice";
 
 export type NodeSel = { name: string; key: string; color: string };
 
@@ -233,19 +234,13 @@ export default function ApexWorld() {
   const [selected, setSelected] = useState<NodeSel | null>(null);
   const [reduced, setReduced] = useState(false);
 
-  // A tap cycles idle → thinking → speaking → idle. That state drives the
-  // backdrop, the light-cast and the reasoning web's activity level.
-  const [showState, setShowState] = useState<OrbState>("idle");
-  const showTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const orbState: OrbState = showState;
+  // Tapping the core runs the real voice loop: listen → ask the agent → speak
+  // the answer. The orb's animation state is driven by that, not simulated.
+  const voice = useApexVoice();
+  const orbState: OrbState =
+    voice.state === "speaking" ? "speaking" : voice.state === "idle" ? "idle" : "thinking";
 
-  const boost = () => {
-    const next: OrbState = showState === "idle" ? "thinking" : showState === "thinking" ? "speaking" : "idle";
-    setShowState(next);
-    if (showTimer.current) clearTimeout(showTimer.current);
-    showTimer.current = setTimeout(() => setShowState("idle"), 8000);
-  };
-  useEffect(() => () => { if (showTimer.current) clearTimeout(showTimer.current); }, []);
+  const lastReply = [...voice.messages].reverse().find((m) => m.role === "assistant")?.content ?? null;
 
   // Single entry point for opening an agent, shared by the SVG graph and the
   // hidden accessible list, so both routes behave identically.
@@ -260,6 +255,10 @@ export default function ApexWorld() {
     mq.addEventListener("change", apply);
     return () => mq.removeEventListener("change", apply);
   }, []);
+
+  // Anything left awaiting approval from an earlier visit should still be here.
+  const { refreshPending } = voice;
+  useEffect(() => { refreshPending(); }, [refreshPending]);
 
   // orb tap cycle → the web's activity level (same states the app streams)
   const webState = orbState === "thinking" ? "processing" : orbState === "speaking" ? "speaking" : "standby";
@@ -329,9 +328,14 @@ export default function ApexWorld() {
       <div
         role="button"
         tabIndex={0}
-        aria-label="Apex core - tap to energize"
-        onClick={boost}
-        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); boost(); } }}
+        aria-label={
+          voice.state === "listening" ? "Apex is listening - tap to stop"
+          : voice.state === "thinking" ? "Apex is thinking"
+          : voice.state === "speaking" ? "Apex is speaking - tap to stop"
+          : "Apex core - tap and speak to it"
+        }
+        onClick={voice.toggle}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); voice.toggle(); } }}
         onMouseDown={(e) => e.preventDefault()}
         style={{
           position: "absolute", left: "50%", top: "50%", transform: "translate(-50%, -50%)",
@@ -340,8 +344,54 @@ export default function ApexWorld() {
         }}
       />
 
-      {/* equalizer + STANDBY cluster */}
-      <OrbStatusBar state={orbState} />
+      {/* equalizer + STANDBY cluster - shows LISTENING / PROCESSING / SPEAKING */}
+      <OrbStatusBar state={voice.state} />
+
+      {/* What Apex just heard and said, so the conversation is readable and not
+          only audible (and so it still works with the speakers muted). */}
+      <div
+        aria-live="polite"
+        style={{
+          position: "absolute", left: "50%", bottom: "clamp(96px, 14vh, 150px)", transform: "translateX(-50%)",
+          width: "min(620px, 86vw)", zIndex: 5, textAlign: "center", pointerEvents: "none",
+        }}
+      >
+        {voice.error ? (
+          <div style={{ fontSize: 13, lineHeight: 1.5, color: "#ffb4a2" }}>{voice.error}</div>
+        ) : voice.state === "listening" ? (
+          <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, letterSpacing: "0.28em", color: "#f5a623" }}>
+            LISTENING…
+          </div>
+        ) : lastReply ? (
+          <div style={{ fontSize: 14, lineHeight: 1.55, color: "rgba(240,237,232,0.82)" }}>{lastReply}</div>
+        ) : null}
+      </div>
+
+      {/* Approve / reject anything the agent proposed out loud. */}
+      {voice.pendingActions.filter((a) => a.status === "pending").length > 0 && (
+        <div style={{
+          position: "absolute", left: "50%", bottom: "clamp(20px, 5vh, 46px)", transform: "translateX(-50%)",
+          width: "min(560px, 90vw)", zIndex: 30, display: "flex", flexDirection: "column", gap: 8,
+        }}>
+          {voice.pendingActions.filter((a) => a.status === "pending").map((action) => (
+            <div key={action.id} style={{
+              background: "rgba(4,8,15,0.88)", border: "1px solid #00e5ff55", borderRadius: 12,
+              padding: "11px 14px", backdropFilter: "blur(8px)", display: "flex",
+              alignItems: "center", gap: 10, flexWrap: "wrap",
+            }}>
+              <span style={{ flex: 1, minWidth: 200, fontSize: 12.5, color: "rgba(240,237,232,0.9)" }}>{action.summary}</span>
+              <button onClick={() => voice.respondToAction(action.id, true)} style={{
+                background: "#00e5ff", color: "#04080f", border: "none", borderRadius: 8,
+                padding: "6px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer",
+              }}>Approve</button>
+              <button onClick={() => voice.respondToAction(action.id, false)} style={{
+                background: "transparent", color: "#f0ede8", border: "1px solid rgba(255,255,255,0.25)",
+                borderRadius: 8, padding: "6px 12px", fontSize: 12, cursor: "pointer",
+              }}>Reject</button>
+            </div>
+          ))}
+        </div>
+      )}
 
       {selected && <AgentOverview sel={selected} onClose={() => setSelected(null)} />}
     </div>

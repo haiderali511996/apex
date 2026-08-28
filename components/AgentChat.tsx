@@ -2,150 +2,44 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Mic, MicOff, Send, Volume2, VolumeX, Check, X as XIcon } from "lucide-react";
-import type { PendingAction } from "@/lib/agent/types";
+import { useApexVoice } from "@/lib/useApexVoice";
 
 const ACCENT = "#00e5ff";
 
-type ChatMessage = { role: "user" | "assistant"; content: string };
-
-// Minimal shape of the non-standard Web Speech API — no official TS lib types ship for it.
-type SpeechRecognitionLike = {
-  continuous: boolean;
-  interimResults: boolean;
-  lang: string;
-  onresult: ((e: { results: { transcript: string }[][] } & { resultIndex?: number }) => void) | null;
-  onend: (() => void) | null;
-  start: () => void;
-  stop: () => void;
-};
+const GREETING =
+  "Hey — I'm Apex. Ask me for a report across your accounts, or tell me what to post and I'll draft it for your approval.";
 
 export default function AgentChat() {
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    { role: "assistant", content: "Hey — I'm Apex. Ask me for a report across your accounts, or tell me what to post and I'll draft it for your approval." },
-  ]);
-  const [input, setInput] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [listening, setListening] = useState(false);
   const [speakEnabled, setSpeakEnabled] = useState(true);
-  const [pendingActions, setPendingActions] = useState<PendingAction[]>([]);
-  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const [input, setInput] = useState("");
+  const voice = useApexVoice({ speak: speakEnabled });
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  const { refreshPending } = voice;
+  useEffect(() => { refreshPending(); }, [refreshPending]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
-  }, [messages, pendingActions]);
+  }, [voice.messages, voice.pendingActions]);
 
-  useEffect(() => {
-    refreshPending();
-  }, []);
-
-  async function refreshPending() {
-    try {
-      const res = await fetch("/api/agent/confirm");
-      const data = await res.json();
-      if (Array.isArray(data.pendingActions)) setPendingActions(data.pendingActions);
-    } catch {
-      // best-effort; the chat flow still surfaces newly proposed actions
-    }
-  }
-
-  function speak(text: string) {
-    if (!speakEnabled || typeof window === "undefined" || !window.speechSynthesis) return;
-    window.speechSynthesis.cancel();
-    const utter = new SpeechSynthesisUtterance(text);
-    window.speechSynthesis.speak(utter);
-  }
-
-  async function send(text: string) {
-    const trimmed = text.trim();
-    if (!trimmed || loading) return;
-    const next = [...messages, { role: "user" as const, content: trimmed }];
-    setMessages(next);
+  const submit = () => {
+    const text = input.trim();
+    if (!text || voice.state === "thinking") return;
     setInput("");
-    setLoading(true);
-    try {
-      const res = await fetch("/api/agent/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: next }),
-      });
-      const data = await res.json();
-      const reply = data.reply || data.error || "Something went wrong.";
-      setMessages((m) => [...m, { role: "assistant", content: reply }]);
-      speak(reply);
-      if (Array.isArray(data.pendingActions) && data.pendingActions.length) {
-        setPendingActions((prev) => [...data.pendingActions, ...prev]);
-      }
-    } catch {
-      setMessages((m) => [...m, { role: "assistant", content: "I couldn't reach the server. Is it running?" }]);
-    } finally {
-      setLoading(false);
-    }
-  }
+    voice.send(text);
+  };
 
-  function toggleListening() {
-    if (typeof window === "undefined") return;
-    const SpeechRecognitionCtor =
-      (window as unknown as { SpeechRecognition?: new () => SpeechRecognitionLike; webkitSpeechRecognition?: new () => SpeechRecognitionLike })
-        .SpeechRecognition ||
-      (window as unknown as { webkitSpeechRecognition?: new () => SpeechRecognitionLike }).webkitSpeechRecognition;
-
-    if (!SpeechRecognitionCtor) {
-      setMessages((m) => [...m, { role: "assistant", content: "Voice input isn't supported in this browser — try Chrome, or just type." }]);
-      return;
-    }
-
-    if (listening) {
-      recognitionRef.current?.stop();
-      setListening(false);
-      return;
-    }
-
-    const recognition = new SpeechRecognitionCtor();
-    recognition.continuous = false;
-    recognition.interimResults = false;
-    recognition.lang = "en-US";
-    recognition.onresult = (e) => {
-      const transcript = e.results?.[e.results.length - 1]?.[0]?.transcript;
-      if (transcript) send(transcript);
-    };
-    recognition.onend = () => setListening(false);
-    recognitionRef.current = recognition;
-    recognition.start();
-    setListening(true);
-  }
-
-  async function respondToAction(id: string, approve: boolean) {
-    setPendingActions((prev) => prev.map((a) => (a.id === id ? { ...a, status: approve ? "approved" : "rejected" } : a)));
-    try {
-      const res = await fetch("/api/agent/confirm", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id, approve }),
-      });
-      const data = await res.json();
-      const action: PendingAction | undefined = data.action;
-      if (action) {
-        setPendingActions((prev) => prev.map((a) => (a.id === id ? action : a)));
-        const summary = action.status === "executed"
-          ? `Done — ${action.result}`
-          : action.status === "failed"
-          ? `That failed: ${action.result}`
-          : `Okay, I won't post that.`;
-        setMessages((m) => [...m, { role: "assistant", content: summary }]);
-        speak(summary);
-      }
-    } catch {
-      setMessages((m) => [...m, { role: "assistant", content: "Couldn't reach the server to confirm that action." }]);
-    }
-  }
-
-  const visiblePending = pendingActions.filter((a) => a.status === "pending" || a.status === "approved");
+  const visiblePending = voice.pendingActions.filter((a) => a.status === "pending" || a.status === "approved");
+  const listening = voice.state === "listening";
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", maxWidth: 720, width: "100%", margin: "0 auto", color: "#f0ede8" }}>
       <div ref={scrollRef} style={{ flex: 1, overflowY: "auto", padding: "20px 8px", display: "flex", flexDirection: "column", gap: 14 }}>
-        {messages.map((m, i) => (
+        <div style={{ alignSelf: "flex-start", maxWidth: "82%", background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 14, padding: "10px 14px", fontSize: 14.5, lineHeight: 1.5 }}>
+          {GREETING}
+        </div>
+
+        {voice.messages.map((m, i) => (
           <div
             key={i}
             style={{
@@ -163,7 +57,10 @@ export default function AgentChat() {
             {m.content}
           </div>
         ))}
-        {loading && <div style={{ fontSize: 13, color: "rgba(240,237,232,0.5)" }}>Apex is thinking…</div>}
+
+        {voice.state === "thinking" && <div style={{ fontSize: 13, color: "rgba(240,237,232,0.5)" }}>Apex is thinking…</div>}
+        {listening && <div style={{ fontSize: 13, color: "#f5a623", letterSpacing: "0.1em" }}>Listening…</div>}
+        {voice.error && <div style={{ fontSize: 13, color: "#ffb4a2" }}>{voice.error}</div>}
 
         {visiblePending.map((action) => (
           <div
@@ -182,20 +79,20 @@ export default function AgentChat() {
             {action.status === "pending" ? (
               <div style={{ display: "flex", gap: 8 }}>
                 <button
-                  onClick={() => respondToAction(action.id, true)}
+                  onClick={() => voice.respondToAction(action.id, true)}
                   style={{ display: "flex", alignItems: "center", gap: 6, background: ACCENT, color: "#04080f", border: "none", borderRadius: 8, padding: "6px 12px", fontSize: 12.5, fontWeight: 600, cursor: "pointer" }}
                 >
-                  <Check size={13} /> Approve &amp; post
+                  <Check size={13} /> Approve
                 </button>
                 <button
-                  onClick={() => respondToAction(action.id, false)}
+                  onClick={() => voice.respondToAction(action.id, false)}
                   style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", color: "#f0ede8", border: "1px solid rgba(255,255,255,0.25)", borderRadius: 8, padding: "6px 12px", fontSize: 12.5, cursor: "pointer" }}
                 >
                   <XIcon size={13} /> Reject
                 </button>
               </div>
             ) : (
-              <div style={{ opacity: 0.6, fontSize: 12 }}>Posting…</div>
+              <div style={{ opacity: 0.6, fontSize: 12 }}>Working…</div>
             )}
           </div>
         ))}
@@ -210,7 +107,7 @@ export default function AgentChat() {
           {speakEnabled ? <Volume2 size={16} style={{ margin: "auto" }} /> : <VolumeX size={16} style={{ margin: "auto" }} />}
         </button>
         <button
-          onClick={toggleListening}
+          onClick={voice.toggle}
           title={listening ? "Stop listening" : "Talk to Apex"}
           style={{ background: listening ? ACCENT : "transparent", border: `1px solid ${listening ? ACCENT : "rgba(255,255,255,0.2)"}`, borderRadius: 10, width: 40, color: listening ? "#04080f" : "#f0ede8", cursor: "pointer" }}
         >
@@ -219,14 +116,14 @@ export default function AgentChat() {
         <input
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") send(input); }}
+          onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
           placeholder="Ask for a report, or tell me what to post…"
           style={{ flex: 1, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: 10, padding: "0 14px", color: "#f0ede8", fontSize: 14 }}
         />
         <button
-          onClick={() => send(input)}
-          disabled={loading}
-          style={{ background: ACCENT, border: "none", borderRadius: 10, width: 40, color: "#04080f", cursor: "pointer", opacity: loading ? 0.5 : 1 }}
+          onClick={submit}
+          disabled={voice.state === "thinking"}
+          style={{ background: ACCENT, border: "none", borderRadius: 10, width: 40, color: "#04080f", cursor: "pointer", opacity: voice.state === "thinking" ? 0.5 : 1 }}
         >
           <Send size={16} style={{ margin: "auto" }} />
         </button>
