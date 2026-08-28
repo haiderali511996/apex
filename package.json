@@ -2,6 +2,7 @@
   "name": "apex-ui",
   "version": "1.0.0",
   "description": "An animated autonomous-agent orb + reasoning-graph UI. Hand-written SVG/CSS, no 3D libraries.",
+  "author": "Haider Ali",
   "license": "MIT",
   "private": false,
   "scripts": {

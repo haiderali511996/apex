@@ -169,7 +169,7 @@ function Core({ state, variant, corner = false, bigDock = false }) {
   useFrame((frame, dt) => {
     // [perf] Tier B Step 1: while a reply streams / Apex speaks, halve the per-frame particle work (skip
     // every other frame) so the main thread stops starving the WS audio-delivery queue. Two guards keep
-    // the throttle from reading as a FROZEN orb (Ruben saw the ball stop mid-way through long replies):
+    // the throttle from reading as a FROZEN orb (Haider saw the ball stop mid-way through long replies):
     // (1) the skipped frame's dt is CARRIED into the next computed frame, so world-speed stays constant
     // at half fps; (2) the throttle applies only to the FIRST 10s of a continuous calm window â€” the
     // audio-starvation risk is the burst at reply start; a long reply gets the full show back after.
@@ -320,7 +320,7 @@ function Core({ state, variant, corner = false, bigDock = false }) {
         // messengers chase tighter so they keep up with a moving (orbiting) target.
         // BALL ease 0.09 â†’ 0.38: 0.09 low-pass-FILTERED the boil â€” the fast sine target was smoothed
         // to near-stillness once the expansion converged, so the awake ball froze after ~3s no matter
-        // the amplitude (the real cause of Ruben's 'stops after a few seconds'). The expansion still
+        // the amplitude (the real cause of Haider's 'stops after a few seconds'). The expansion still
         // travels smoothly because Rt itself is lerped; the per-particle ease no longer eats the boil.
         const e = (armT[i] >= 0 && i < A) ? 0.2 : 0.38
         const k = i * 3
