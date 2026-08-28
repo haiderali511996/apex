@@ -9,6 +9,7 @@
 import { useEffect, useState } from "react";
 import { Volume2, Check } from "lucide-react";
 import { englishVoices, savedVoiceName, saveVoiceName, pickVoice } from "@/lib/useApexVoice";
+import { speakText } from "@/lib/speech";
 
 const ACCENT = "#00e5ff";
 const SAMPLE = "Your traffic is up eighteen percent this month. The pricing post is doing the heavy lifting.";
@@ -16,6 +17,7 @@ const SAMPLE = "Your traffic is up eighteen percent this month. The pricing post
 export default function VoicePicker({ onClose }: { onClose: () => void }) {
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
+  const [status, setStatus] = useState<{ kind: "playing" | "ok" | "error"; text: string } | null>(null);
 
   useEffect(() => {
     const load = () => {
@@ -29,11 +31,21 @@ export default function VoicePicker({ onClose }: { onClose: () => void }) {
   }, []);
 
   const preview = (voice: SpeechSynthesisVoice) => {
-    window.speechSynthesis.cancel();
-    const utter = new SpeechSynthesisUtterance(SAMPLE);
-    utter.voice = voice;
-    utter.lang = voice.lang;
-    window.speechSynthesis.speak(utter);
+    setStatus({ kind: "playing", text: `Playing ${voice.name}…` });
+    speakText(SAMPLE, voice, {
+      onStart: () => setStatus({ kind: "playing", text: `Speaking as ${voice.name}…` }),
+      onEnd: () => setStatus({ kind: "ok", text: `${voice.name} works.` }),
+      onError: (reason) =>
+        setStatus({
+          kind: "error",
+          text:
+            reason === "silent"
+              ? `${voice.name} produced no audio. Check the tab isn't muted (right-click the tab) and your Mac's output volume, then try another voice.`
+              : reason === "not-allowed"
+              ? "The browser blocked audio. Click anywhere on the page first, then try again."
+              : `${voice.name} failed: ${reason}. Try a different voice.`,
+        }),
+    });
   };
 
   const choose = (voice: SpeechSynthesisVoice) => {
@@ -103,6 +115,15 @@ export default function VoicePicker({ onClose }: { onClose: () => void }) {
           );
         })}
       </div>
+
+      {status && (
+        <div style={{
+          padding: "9px 14px", borderTop: `1px solid ${ACCENT}22`, fontSize: 11, lineHeight: 1.5,
+          color: status.kind === "error" ? "#ffb4a2" : status.kind === "ok" ? "#7ee0a5" : ACCENT,
+        }}>
+          {status.text}
+        </div>
+      )}
 
       <div style={{ padding: "10px 14px", borderTop: `1px solid ${ACCENT}22`, fontSize: 10.5, lineHeight: 1.5, color: "rgba(240,237,232,0.45)" }}>
         For markedly better quality, download an Enhanced or Premium voice in

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PendingAction } from "./agent/types";
+import { speakText, cancelSpeech, speechAvailable } from "./speech";
 
 export type VoiceState = "idle" | "listening" | "thinking" | "speaking";
 export type ChatMessage = { role: "user" | "assistant"; content: string };
@@ -176,48 +177,36 @@ export function useApexVoice(options: { speak?: boolean; wakeWord?: boolean } = 
         onDone?.();
       };
 
-      if (!speakEnabled || typeof window === "undefined" || !window.speechSynthesis) {
+      if (!speakEnabled || !speechAvailable()) {
         finish();
         return;
       }
 
-      // Speech is a nicety; the text must survive any failure in it. A throw
-      // here would otherwise surface as a network error and hide the reply.
-      try {
-        window.speechSynthesis.cancel();
-        setRevealed(0);
+      setRevealed(0);
 
-        const utter = new SpeechSynthesisUtterance(text);
-        const voice = pickVoice();
-        if (voice) {
-          try {
-            utter.voice = voice;
-            utter.lang = voice.lang;
-          } catch {
-            // Some browsers reject the voice object; the default still speaks.
-          }
-        }
-        utter.rate = 1.0;
-        utter.pitch = 1.0;
-        utter.onboundary = (e: SpeechSynthesisEvent) => {
-          const end = e.charIndex + (e.charLength ?? 0);
+      // The paced reveal runs regardless, so a silent browser still shows the
+      // reply arriving word by word rather than freezing on an empty caption.
+      const tick = 60;
+      revealTimer.current = setInterval(() => {
+        const next = Math.min(revealedRef.current + (CHARS_PER_SEC * tick) / 1000, text.length);
+        setRevealed(next);
+        if (next >= text.length) stopReveal();
+      }, tick);
+
+      speakText(text, pickVoice(), {
+        onBoundary: (charIndex, charLength) => {
+          const end = charIndex + charLength;
           if (end > revealedRef.current) setRevealed(Math.min(end, text.length));
-        };
-        utter.onend = finish;
-        utter.onerror = finish;
-
-        const tick = 60;
-        revealTimer.current = setInterval(() => {
-          const next = Math.min(revealedRef.current + (CHARS_PER_SEC * tick) / 1000, text.length);
-          setRevealed(next);
-          if (next >= text.length) stopReveal();
-        }, tick);
-
-        window.speechSynthesis.speak(utter);
-      } catch {
-        // No voice available — show the whole reply rather than nothing.
-        finish();
-      }
+        },
+        onEnd: finish,
+        // Speech is a nicety; the text must survive any failure in it.
+        onError: (reason) => {
+          finish();
+          if (reason === "silent") {
+            setError("No audio came out — check the tab isn't muted and your volume is up. The reply is above.");
+          }
+        },
+      });
     },
     [speakEnabled, stopReveal, setRevealed]
   );
@@ -276,7 +265,7 @@ export function useApexVoice(options: { speak?: boolean; wakeWord?: boolean } = 
       setError("Voice input isn't supported in this browser — try Chrome, or type instead.");
       return;
     }
-    if (typeof window !== "undefined") window.speechSynthesis?.cancel();
+    cancelSpeech();
 
     const recognition = new Ctor();
     recognition.continuous = false;
@@ -318,7 +307,7 @@ export function useApexVoice(options: { speak?: boolean; wakeWord?: boolean } = 
 
   /** Cuts the voice off mid-sentence and settles the caption where it stopped. */
   const stopSpeaking = useCallback(() => {
-    if (typeof window !== "undefined") window.speechSynthesis?.cancel();
+    cancelSpeech();
     stopReveal();
     setState((s) => (s === "speaking" ? "idle" : s));
   }, [stopReveal]);
@@ -330,7 +319,7 @@ export function useApexVoice(options: { speak?: boolean; wakeWord?: boolean } = 
       return;
     }
     if (state === "speaking") {
-      if (typeof window !== "undefined") window.speechSynthesis?.cancel();
+      cancelSpeech();
       setState("idle");
       return;
     }
@@ -483,7 +472,7 @@ export function useApexVoice(options: { speak?: boolean; wakeWord?: boolean } = 
       try { wakeRef.current?.stop(); } catch { /* already stopped */ }
       recognitionRef.current?.stop();
       stopReveal();
-      if (typeof window !== "undefined") window.speechSynthesis?.cancel();
+      cancelSpeech();
     };
   }, [stopReveal]);
 
