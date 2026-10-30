@@ -16,7 +16,40 @@ serverless platform that wipes the filesystem between requests.
 
 ## 1. Claude (required)
 
-The chat itself is powered by the Claude API.
+There are two ways to run the agent's thinking. Pick one with `IMEX_BACKEND`.
+
+### Option A — your Claude Code subscription (`IMEX_BACKEND=claude-code`)
+
+The turn is handed to the [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk),
+which is Claude Code as a library. It runs the Claude Code binary on this
+machine, so the turn is billed against whatever that binary is signed in
+as — if you've logged in to Claude Code with your subscription, no API
+credits are spent.
+
+1. Sign in to Claude Code once on this machine: run `claude` in a terminal
+   and complete the login. (The SDK ships its own binary, so you don't need
+   a separate Claude Code install — but the login is shared, so signing in
+   via the CLI is what authenticates it.)
+2. Set `IMEX_BACKEND=claude-code` in `.env.local`.
+3. No `ANTHROPIC_API_KEY` needed.
+
+Two limits worth knowing:
+
+- **It only works where the server and your login are on the same machine.**
+  It spawns a local process, so a deployed instance can't use it — use
+  option B there.
+- **It's for you, not your users.** Anthropic does not permit offering
+  claude.ai login or subscription rate limits to other people through your
+  own product without prior approval. Running Imex yourself against your own
+  login is just you using your own Claude Code; shipping it to other users
+  on your login is not.
+
+Imex gets only its own connector tools under this backend. Claude Code's
+file and shell tools (`Read`, `Write`, `Edit`, `Bash`, `Glob`, `Grep`, …)
+are blocked outright — it's an assistant for your accounts, and it runs on
+your machine, so it has no business reading your disk.
+
+### Option B — the Claude API (`IMEX_BACKEND=api`, the default)
 
 1. Get a key at https://console.anthropic.com/settings/keys.
 2. Set `ANTHROPIC_API_KEY`.

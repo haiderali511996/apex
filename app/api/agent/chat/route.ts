@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { toolDefinitions, executeTool } from "@/lib/agent/tools";
 import { anthropicClient, MODEL } from "@/lib/agent/anthropicClient";
+import { runViaClaudeCode, describeClaudeCodeError } from "@/lib/agent/claudeCode";
 import type { PendingAction } from "@/lib/agent/types";
 
 export const runtime = "nodejs";
@@ -22,6 +23,19 @@ When asked for a report or "how are we doing", pull the relevant data first, the
 Keep replies conversational and tight, the way you'd say them out loud — replies may be read aloud. If an account isn't configured yet, say so plainly and never invent numbers.`;
 
 const MAX_TOOL_ROUNDS = 8;
+
+/**
+ * Which backend runs the turn.
+ *
+ * "claude-code" hands it to the Claude Agent SDK, which drives the local
+ * Claude Code binary and so bills against whatever that is logged in as —
+ * a subscription, rather than API credits. It needs Claude Code installed and
+ * signed in on the same machine as this server, so it is for local use.
+ *
+ * "api" calls the Messages API with ANTHROPIC_API_KEY and is what a deployed
+ * instance uses.
+ */
+const BACKEND = (process.env.IMEX_BACKEND || "api").trim().toLowerCase();
 
 /** Turns an SDK failure into something the user can actually act on. */
 function describeError(err: unknown): { message: string; status: number } {
@@ -55,9 +69,9 @@ function describeError(err: unknown): { message: string; status: number } {
 }
 
 export async function POST(req: NextRequest) {
-  if (!process.env.ANTHROPIC_API_KEY) {
+  if (BACKEND === "api" && !process.env.ANTHROPIC_API_KEY) {
     return NextResponse.json(
-      { error: "ANTHROPIC_API_KEY is not set on the server. See SETUP.md." },
+      { error: "ANTHROPIC_API_KEY is not set on the server. See SETUP.md, or set IMEX_BACKEND=claude-code to use your Claude Code login instead." },
       { status: 500 }
     );
   }
@@ -67,6 +81,20 @@ export async function POST(req: NextRequest) {
   };
   if (!Array.isArray(messages) || !messages.length) {
     return NextResponse.json({ error: "messages is required" }, { status: 400 });
+  }
+
+  if (BACKEND === "claude-code") {
+    try {
+      const { reply, pendingActions, costUsd } = await runViaClaudeCode({
+        messages,
+        systemPrompt: SYSTEM_PROMPT,
+      });
+      return NextResponse.json({ reply, pendingActions, costUsd });
+    } catch (err) {
+      const { message, status } = describeClaudeCodeError(err);
+      console.error("[agent/chat:claude-code]", err);
+      return NextResponse.json({ error: message, pendingActions: [] }, { status });
+    }
   }
 
   const anthropic = anthropicClient();
