@@ -16,7 +16,40 @@ serverless platform that wipes the filesystem between requests.
 
 ## 1. Claude (required)
 
-The chat itself is powered by the Claude API.
+There are two ways to run the agent's thinking. Pick one with `IMEX_BACKEND`.
+
+### Option A — your Claude Code subscription (`IMEX_BACKEND=claude-code`)
+
+The turn is handed to the [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk),
+which is Claude Code as a library. It runs the Claude Code binary on this
+machine, so the turn is billed against whatever that binary is signed in
+as — if you've logged in to Claude Code with your subscription, no API
+credits are spent.
+
+1. Sign in to Claude Code once on this machine: run `claude` in a terminal
+   and complete the login. (The SDK ships its own binary, so you don't need
+   a separate Claude Code install — but the login is shared, so signing in
+   via the CLI is what authenticates it.)
+2. Set `IMEX_BACKEND=claude-code` in `.env.local`.
+3. No `ANTHROPIC_API_KEY` needed.
+
+Two limits worth knowing:
+
+- **It only works where the server and your login are on the same machine.**
+  It spawns a local process, so a deployed instance can't use it — use
+  option B there.
+- **It's for you, not your users.** Anthropic does not permit offering
+  claude.ai login or subscription rate limits to other people through your
+  own product without prior approval. Running Imex yourself against your own
+  login is just you using your own Claude Code; shipping it to other users
+  on your login is not.
+
+Imex gets only its own connector tools under this backend. Claude Code's
+file and shell tools (`Read`, `Write`, `Edit`, `Bash`, `Glob`, `Grep`, …)
+are blocked outright — it's an assistant for your accounts, and it runs on
+your machine, so it has no business reading your disk.
+
+### Option B — the Claude API (`IMEX_BACKEND=api`, the default)
 
 1. Get a key at https://console.anthropic.com/settings/keys.
 2. Set `ANTHROPIC_API_KEY`.
@@ -27,6 +60,32 @@ The chat itself is powered by the Claude API.
    Settings → Workspaces (the id starts with `wrkspc_`, and also appears
    in the URL when you open a workspace). Keys created directly inside a
    workspace don't need this.
+
+## 1b. Voice (optional)
+
+Left alone, Imex speaks through the browser's `speechSynthesis`, which plays
+whichever voices your operating system ships. On macOS the built-in compact
+voices sound robotic, and no setting changes that — the fix is to stop using
+them.
+
+Set an ElevenLabs key and it speaks with a neural voice instead:
+
+1. Get a key at https://elevenlabs.io/app/settings/api-keys and set
+   `ELEVENLABS_API_KEY`.
+2. Start the app and open `GET /api/tts` in a browser. With the key set it
+   lists every voice on your account and every model you can use.
+3. Put the `id` of the voice you want in `ELEVENLABS_VOICE_ID`.
+4. Optionally set `ELEVENLABS_MODEL_ID` — the default,
+   `eleven_multilingual_v2`, is the highest quality; a turbo or flash model
+   from that same listing responds faster, which suits conversation.
+
+The key stays on the server; the browser only ever receives audio.
+
+Captions stay in step because the server asks for per-character timestamps
+along with the audio, and the client turns those back into the same
+word-boundary events `speechSynthesis` used to fire. If the key is missing,
+rejected, or out of quota, speech silently falls back to the system voice for
+the rest of the session rather than failing.
 
 ## 2. Google — Search Console, YouTube, Gmail, Calendar, Drive, Sheets, Analytics
 

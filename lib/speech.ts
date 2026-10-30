@@ -17,6 +17,8 @@
  * pretending it worked.
  */
 
+import { speakNeural, cancelNeuralSpeech, neuralVoiceRuledOut } from "./neuralVoice";
+
 // (3) — a module-level reference keeps the utterance alive while it speaks.
 let active: SpeechSynthesisUtterance | null = null;
 
@@ -51,12 +53,19 @@ export type SpeakHandlers = {
   onError?: (reason: string) => void;
 };
 
-export function speechAvailable(): boolean {
+function synthAvailable(): boolean {
   return typeof window !== "undefined" && !!window.speechSynthesis;
 }
 
+/** True if anything at all can speak — the neural voice or the OS one. */
+export function speechAvailable(): boolean {
+  if (typeof window === "undefined") return false;
+  return !!window.speechSynthesis || !neuralVoiceRuledOut();
+}
+
 export function cancelSpeech() {
-  if (!speechAvailable()) return;
+  cancelNeuralSpeech();
+  if (!synthAvailable()) return;
   try {
     window.speechSynthesis.cancel();
   } catch {
@@ -65,14 +74,37 @@ export function cancelSpeech() {
   active = null;
 }
 
+/**
+ * Speaks, preferring the neural voice.
+ *
+ * ElevenLabs is tried first and the operating system's voice is the fallback,
+ * for an unconfigured key, a transient failure, or a browser that blocks the
+ * audio. Both paths report through the same handlers — the neural one rebuilds
+ * word boundaries from timestamps — so callers never need to know which spoke.
+ */
 export function speakText(
+  text: string,
+  voice: SpeechSynthesisVoice | null,
+  handlers: SpeakHandlers = {}
+): void {
+  if (neuralVoiceRuledOut()) {
+    speakViaSynth(text, voice, handlers);
+    return;
+  }
+
+  void speakNeural(text, handlers).then((spoke) => {
+    if (!spoke) speakViaSynth(text, voice, handlers);
+  });
+}
+
+function speakViaSynth(
   text: string,
   voice: SpeechSynthesisVoice | null,
   handlers: SpeakHandlers = {},
   // Set when this is already the no-voice retry, so it can't loop.
   isRetry = false
 ): void {
-  if (!speechAvailable()) {
+  if (!synthAvailable()) {
     handlers.onError?.("This browser has no speech synthesis.");
     return;
   }
@@ -142,7 +174,7 @@ export function speakText(
           // and retry on the default, keeping the language for the accent.
           markNamedVoicesBroken();
           cancelSpeech();
-          speakText(text, voice, handlers, true);
+          speakViaSynth(text, voice, handlers, true);
           return;
         }
         handlers.onError?.("silent");
