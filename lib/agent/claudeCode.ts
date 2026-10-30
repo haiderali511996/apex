@@ -49,6 +49,23 @@ const BLOCKED_BUILTINS = [
   "SlashCommand",
 ];
 
+/**
+ * The environment the Claude Code process runs in.
+ *
+ * Claude Code resolves credentials in order and an API key wins over the
+ * signed-in subscription. .env.local puts ANTHROPIC_API_KEY into process.env
+ * whichever backend is selected, and the child would inherit it — so picking
+ * this backend to avoid API billing would silently go on billing the API.
+ * Stripping the key here is what actually makes the subscription take over.
+ */
+function subscriptionEnv(): Record<string, string | undefined> {
+  const copy: Record<string, string | undefined> = { ...process.env };
+  delete copy.ANTHROPIC_API_KEY;
+  delete copy.ANTHROPIC_AUTH_TOKEN;
+  delete copy.ANTHROPIC_WORKSPACE_ID;
+  return copy;
+}
+
 export type ClaudeCodeRun = {
   reply: string;
   pendingActions: PendingAction[];
@@ -109,6 +126,12 @@ export async function runViaClaudeCode({
   let reply = "";
   let costUsd = 0;
 
+  // Which backend ran a turn is otherwise invisible, and mistaking one for the
+  // other is exactly how an "unmetered" setup keeps charging an API account.
+  console.log(
+    "[agent/chat] backend=claude-code (subscription login; ANTHROPIC_API_KEY not passed through)"
+  );
+
   const run = query({
     prompt: renderPrompt(messages),
     options: {
@@ -119,6 +142,7 @@ export async function runViaClaudeCode({
       // Don't inherit the developer's own CLAUDE.md, skills or settings — Imex
       // should behave the same whoever's machine it runs on.
       settingSources: [],
+      env: subscriptionEnv(),
       maxTurns,
       ...(process.env.IMEX_CLAUDE_CODE_MODEL
         ? { model: process.env.IMEX_CLAUDE_CODE_MODEL }

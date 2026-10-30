@@ -20,6 +20,12 @@ const API = "https://api.elevenlabs.io/v1";
 /** Confirmed default. Override with ELEVENLABS_MODEL_ID for a faster one. */
 const DEFAULT_MODEL = "eleven_multilingual_v2";
 
+/** Reads a tuning knob from the environment, falling back to the default. */
+function num(raw: string | undefined, fallback: number): number {
+  const n = Number(raw);
+  return raw !== undefined && raw !== "" && Number.isFinite(n) ? n : fallback;
+}
+
 function key(): string | undefined {
   return process.env.ELEVENLABS_API_KEY?.trim() || undefined;
 }
@@ -139,12 +145,15 @@ export async function POST(req: NextRequest) {
         body: JSON.stringify({
           text,
           model_id: process.env.ELEVENLABS_MODEL_ID?.trim() || DEFAULT_MODEL,
+          // ElevenLabs' documented defaults. Earlier these were nudged off
+          // them for expressiveness — lower stability, a little style — but
+          // both of those trade stability for variance, which is the wrong
+          // bargain when the symptom to rule out is a distorted voice. Tune
+          // from here with the env vars rather than by editing this.
           voice_settings: {
-            // A shade below the default, which reads as more expressive —
-            // this is a colleague talking, not an audiobook.
-            stability: 0.4,
-            similarity_boost: 0.75,
-            style: 0.15,
+            stability: num(process.env.ELEVENLABS_STABILITY, 0.5),
+            similarity_boost: num(process.env.ELEVENLABS_SIMILARITY, 0.75),
+            style: num(process.env.ELEVENLABS_STYLE, 0),
             use_speaker_boost: true,
           },
         }),

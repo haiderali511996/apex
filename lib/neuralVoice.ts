@@ -43,12 +43,25 @@ export function neuralVoiceReason(): string {
   return unavailableReason;
 }
 
+/**
+ * Supersession token.
+ *
+ * Two overlapping requests used to be able to play at the same time: the
+ * second one could only cancel audio that already existed, so a first request
+ * still in flight went on to create its own element and play underneath. Two
+ * copies of the same sentence a fraction of a second apart do not sound like a
+ * glitch, they sound like a different, inhuman voice. Every entry point bumps
+ * this, and a request whose token is stale stops without touching playback.
+ */
+let generation = 0;
+
 let audio: HTMLAudioElement | null = null;
 let objectUrl: string | null = null;
 let frame = 0;
 let abort: AbortController | null = null;
 
 export function cancelNeuralSpeech() {
+  generation++;
   if (frame) cancelAnimationFrame(frame);
   frame = 0;
   abort?.abort();
@@ -99,6 +112,7 @@ export async function speakNeural(text: string, handlers: SpeakHandlers): Promis
   if (available === "no") return false;
 
   cancelNeuralSpeech();
+  const mine = generation;
   abort = new AbortController();
 
   let payload: TtsResponse;
@@ -133,6 +147,10 @@ export async function speakNeural(text: string, handlers: SpeakHandlers): Promis
   available = "yes";
   unavailableReason = "";
 
+  // Something newer started while this was fetching — drop it rather than
+  // start a second stream over the top of it.
+  if (mine !== generation) return true;
+
   return new Promise<boolean>((resolve) => {
     const blob = base64ToBlob(payload.audioBase64, payload.mimeType || "audio/mpeg");
     objectUrl = URL.createObjectURL(blob);
@@ -143,7 +161,7 @@ export async function speakNeural(text: string, handlers: SpeakHandlers): Promis
     let next = 0;
 
     const tick = () => {
-      if (audio !== el) return;
+      if (audio !== el || mine !== generation) return;
       const t = el.currentTime;
       while (next < cues.length && cues[next].at <= t) {
         handlers.onBoundary?.(cues[next].charIndex, cues[next].charLength);
@@ -153,6 +171,10 @@ export async function speakNeural(text: string, handlers: SpeakHandlers): Promis
     };
 
     el.onplaying = () => {
+      if (mine !== generation) {
+        el.pause();
+        return;
+      }
       handlers.onStart?.();
       frame = requestAnimationFrame(tick);
     };
