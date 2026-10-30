@@ -61,6 +61,32 @@ your machine, so it has no business reading your disk.
    in the URL when you open a workspace). Keys created directly inside a
    workspace don't need this.
 
+## 1b. Voice (optional)
+
+Left alone, Imex speaks through the browser's `speechSynthesis`, which plays
+whichever voices your operating system ships. On macOS the built-in compact
+voices sound robotic, and no setting changes that — the fix is to stop using
+them.
+
+Set an ElevenLabs key and it speaks with a neural voice instead:
+
+1. Get a key at https://elevenlabs.io/app/settings/api-keys and set
+   `ELEVENLABS_API_KEY`.
+2. Start the app and open `GET /api/tts` in a browser. With the key set it
+   lists every voice on your account and every model you can use.
+3. Put the `id` of the voice you want in `ELEVENLABS_VOICE_ID`.
+4. Optionally set `ELEVENLABS_MODEL_ID` — the default,
+   `eleven_multilingual_v2`, is the highest quality; a turbo or flash model
+   from that same listing responds faster, which suits conversation.
+
+The key stays on the server; the browser only ever receives audio.
+
+Captions stay in step because the server asks for per-character timestamps
+along with the audio, and the client turns those back into the same
+word-boundary events `speechSynthesis` used to fire. If the key is missing,
+rejected, or out of quota, speech silently falls back to the system voice for
+the rest of the session rather than failing.
+
 ## 2. Google — Search Console, YouTube, Gmail, Calendar, Drive, Sheets, Analytics
 
 All seven share **one** OAuth app and **one** refresh token.
