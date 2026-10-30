@@ -49,6 +49,16 @@ function describeError(err: unknown): { message: string; status: number } {
     return { message: "Rate limited by the Claude API — wait a moment and try again.", status: 429 };
   }
   if (err instanceof Anthropic.BadRequestError) {
+    // An empty balance arrives as a 400, not a 402, and the generic message
+    // ("the Claude API rejected the request") reads like a bug in the request
+    // rather than an account that needs topping up.
+    if (/credit balance/i.test(err.message)) {
+      return {
+        message:
+          "Your Anthropic API account is out of credits. Either add credits at console.anthropic.com → Plans & Billing, or set IMEX_BACKEND=claude-code in .env.local to run on your Claude Code subscription instead and spend no API credits at all.",
+        status: 402,
+      };
+    }
     // Identity-linked keys are rejected until they name a workspace.
     if (/workspace/i.test(err.message)) {
       return {
