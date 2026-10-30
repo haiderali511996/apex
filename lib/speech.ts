@@ -17,7 +17,7 @@
  * pretending it worked.
  */
 
-import { speakNeural, cancelNeuralSpeech, neuralVoiceRuledOut } from "./neuralVoice";
+import { speakNeural, cancelNeuralSpeech, neuralVoiceRuledOut, neuralVoiceReason } from "./neuralVoice";
 
 // (3) — a module-level reference keeps the utterance alive while it speaks.
 let active: SpeechSynthesisUtterance | null = null;
@@ -93,7 +93,16 @@ export function speakText(
   }
 
   void speakNeural(text, handlers).then((spoke) => {
-    if (!spoke) speakViaSynth(text, voice, handlers);
+    if (spoke) return;
+    // The system voice is the fallback, and on some machines it is silent
+    // too. When both fail, the useful thing to report is why the neural
+    // voice didn't run — "check your volume" sends the user hunting for a
+    // problem that isn't there.
+    const why = neuralVoiceReason();
+    speakViaSynth(text, voice, {
+      ...handlers,
+      onError: (reason) => handlers.onError?.(reason === "silent" && why ? why : reason),
+    });
   });
 }
 

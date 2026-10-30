@@ -119,15 +119,19 @@ export async function speakNeural(text: string, handlers: SpeakHandlers): Promis
     if (!res.ok) {
       // A transient failure — fall back for this utterance, but keep trying
       // on the next one.
+      const body = (await res.json().catch(() => ({}))) as { error?: string };
+      unavailableReason = body.error ?? `Speech service error ${res.status}.`;
       return false;
     }
     payload = (await res.json()) as TtsResponse;
   } catch (err) {
     if ((err as Error)?.name === "AbortError") return true; // we stopped it
+    unavailableReason = err instanceof Error ? err.message : String(err);
     return false;
   }
 
   available = "yes";
+  unavailableReason = "";
 
   return new Promise<boolean>((resolve) => {
     const blob = base64ToBlob(payload.audioBase64, payload.mimeType || "audio/mpeg");
@@ -167,14 +171,19 @@ export async function speakNeural(text: string, handlers: SpeakHandlers): Promis
     el.onerror = () => {
       if (frame) cancelAnimationFrame(frame);
       frame = 0;
+      unavailableReason = "The audio returned by the speech service wouldn't play.";
       resolve(false);
     };
 
-    el.play().catch(() => {
+    el.play().catch((err: unknown) => {
       // Autoplay was blocked, or the element was torn down. The system voice
       // is subject to the same gesture rules, but let the caller decide.
       if (frame) cancelAnimationFrame(frame);
       frame = 0;
+      unavailableReason =
+        (err as Error)?.name === "NotAllowedError"
+          ? "The browser blocked audio until you interact with the page — tap the orb once."
+          : "Audio playback failed to start.";
       resolve(false);
     });
   });

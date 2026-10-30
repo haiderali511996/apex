@@ -224,6 +224,10 @@ export function useApexVoice(options: {
           finish();
           if (reason === "silent") {
             setError("No audio came out — check the tab isn't muted and your volume is up. The reply is above.");
+          } else if (reason && reason !== "interrupted" && reason !== "canceled") {
+            // A specific cause — a rejected key, a blocked autoplay — is worth
+            // saying out loud instead of hiding behind a generic message.
+            setError(`${reason} The reply is above.`);
           }
         },
       });

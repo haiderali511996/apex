@@ -25,6 +25,27 @@ function key(): string | undefined {
 }
 
 /**
+ * ElevenLabs explains its own failures well — "Invalid API key", "missing
+ * permissions", a quota message — in a JSON `detail`. Dropping that and
+ * reporting a bare status code turns a two-second fix into a guessing game,
+ * so the message is passed through verbatim.
+ */
+async function explain(res: Response): Promise<string> {
+  const raw = await res.text();
+  try {
+    const parsed = JSON.parse(raw) as {
+      detail?: { message?: string; status?: string } | string;
+    };
+    const d = parsed.detail;
+    if (typeof d === "string") return d;
+    if (d?.message) return d.status ? `${d.message} (${d.status})` : d.message;
+  } catch {
+    // Not JSON — fall through to the raw body.
+  }
+  return raw.slice(0, 300) || `HTTP ${res.status}`;
+}
+
+/**
  * Lists the voices and models on the account, so a voice can be chosen by
  * name rather than by pasting in an id found somewhere else. Also how the
  * client learns whether neural speech is configured at all.
@@ -45,10 +66,17 @@ export async function GET() {
     ]);
 
     if (!voicesRes.ok) {
-      return NextResponse.json(
-        { enabled: false, reason: `ElevenLabs rejected the key (${voicesRes.status}).` },
-        { status: 200 }
-      );
+      const detail = await explain(voicesRes);
+      // A key scoped to text-to-speech only can be refused here and still
+      // speak perfectly well, so a permissions failure is reported as a
+      // warning rather than as "not configured".
+      const scoped = /permission|scope|unauthorized_access/i.test(detail);
+      return NextResponse.json({
+        enabled: scoped,
+        reason: scoped
+          ? `The key can't list voices (${detail}), but may still speak. Set ELEVENLABS_VOICE_ID by hand.`
+          : `ElevenLabs rejected the key (${voicesRes.status}): ${detail}`,
+      });
     }
 
     const voices = (await voicesRes.json()) as {
@@ -124,12 +152,12 @@ export async function POST(req: NextRequest) {
     );
 
     if (!res.ok) {
-      const detail = await res.text();
+      const detail = await explain(res);
       // A bad key or an exhausted quota won't fix itself on retry, so these
       // are reported as "not configured" too and the client stops asking.
       const status = res.status === 401 || res.status === 403 || res.status === 429 ? 503 : 502;
       return NextResponse.json(
-        { error: `ElevenLabs error ${res.status}: ${detail.slice(0, 300)}` },
+        { error: `ElevenLabs ${res.status}: ${detail}` },
         { status }
       );
     }
