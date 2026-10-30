@@ -13,7 +13,7 @@ import type { HoloState } from "./state";
  * An elliptical radial field sitting just behind the facial grid, centred
  * between the eyes and the mouth, with a bright point at its heart. Drawn
  * additively and without depth write so the cyan contours stay legible over
- * it, and it breathes gently — faster and brighter while Imex speaks.
+ * it, and it breathes gently — faster and brighter while Eric speaks.
  */
 export default function FaceCore({ state }: { state: HoloState }) {
   const geometry = useMemo(() => new THREE.PlaneGeometry(0.95, 1.15, 1, 1), []);

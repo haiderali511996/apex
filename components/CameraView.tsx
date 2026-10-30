@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * The live camera feed, shown whenever Imex has it open. It is deliberately
+ * The live camera feed, shown whenever Eric has it open. It is deliberately
  * visible and labelled — a page holding the camera open should never be
  * ambiguous about it — and it can always be closed from here as well as by
  * voice.
@@ -52,7 +52,7 @@ export default function CameraView({
           style={{
             width: 7, height: 7, borderRadius: "50%", background: "#ff5f56",
             boxShadow: "0 0 8px #ff5f56", flexShrink: 0,
-            animation: looking ? "imexRec 1s ease-in-out infinite alternate" : "none",
+            animation: looking ? "ericRec 1s ease-in-out infinite alternate" : "none",
           }}
         />
         <span style={{ fontFamily: "var(--font-mono)", fontSize: 9, letterSpacing: "0.22em", color: "rgba(240,237,232,0.65)" }}>
@@ -71,7 +71,7 @@ export default function CameraView({
         </button>
       </div>
 
-      <style>{`@keyframes imexRec { from { opacity: .35 } to { opacity: 1 } }`}</style>
+      <style>{`@keyframes ericRec { from { opacity: .35 } to { opacity: 1 } }`}</style>
     </div>
   );
 }

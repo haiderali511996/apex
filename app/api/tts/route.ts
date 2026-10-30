@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 export const runtime = "nodejs";
 
 /**
- * Neural speech, so Imex doesn't sound like a robot.
+ * Neural speech, so Eric doesn't sound like a robot.
  *
  * The browser's speechSynthesis plays the operating system's built-in voices.
  * On macOS the compact ones are robotic by design and no setting fixes that —

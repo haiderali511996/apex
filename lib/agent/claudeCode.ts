@@ -23,10 +23,10 @@ import type { PendingAction } from "./types";
  */
 
 /** The in-process MCP server the connectors are exposed through. */
-const SERVER_NAME = "imex";
+const SERVER_NAME = "eric";
 
 /**
- * Claude Code ships with file and shell tools. Imex is an assistant for
+ * Claude Code ships with file and shell tools. Eric is an assistant for
  * accounts and reports, not a coding agent, and its working directory is the
  * user's own machine — so the built-ins are blocked outright and only the
  * connectors are left. `allowedTools` alone would not do this: it auto-approves
@@ -77,7 +77,7 @@ export type ClaudeCodeRun = {
 function renderPrompt(messages: { role: "user" | "assistant"; content: string }[]): string {
   if (messages.length === 1) return messages[0].content;
   return messages
-    .map((m) => `${m.role === "user" ? "Haider" : "Imex"}: ${m.content}`)
+    .map((m) => `${m.role === "user" ? "Haider" : "Eric"}: ${m.content}`)
     .join("\n\n");
 }
 
@@ -139,13 +139,14 @@ export async function runViaClaudeCode({
       mcpServers: { [SERVER_NAME]: server },
       allowedTools: toolDefinitions.map((d) => `mcp__${SERVER_NAME}__${d.name}`),
       disallowedTools: BLOCKED_BUILTINS,
-      // Don't inherit the developer's own CLAUDE.md, skills or settings — Imex
+      // Don't inherit the developer's own CLAUDE.md, skills or settings — Eric
       // should behave the same whoever's machine it runs on.
       settingSources: [],
       env: subscriptionEnv(),
       maxTurns,
-      ...(process.env.IMEX_CLAUDE_CODE_MODEL
-        ? { model: process.env.IMEX_CLAUDE_CODE_MODEL }
+      // The IMEX_ name is still read, for the same reason as ERIC_BACKEND.
+      ...(process.env.ERIC_CLAUDE_CODE_MODEL || process.env.IMEX_CLAUDE_CODE_MODEL
+        ? { model: (process.env.ERIC_CLAUDE_CODE_MODEL || process.env.IMEX_CLAUDE_CODE_MODEL)! }
         : {}),
     },
   });

@@ -7,7 +7,7 @@ import type { PendingAction } from "@/lib/agent/types";
 
 export const runtime = "nodejs";
 
-const SYSTEM_PROMPT = `You are Imex, chief of staff to Haider — a solo founder running websites and social channels. Address him as Haider, sparingly, the way a colleague would rather than after every sentence. You coordinate a roster of specialists and connected accounts:
+const SYSTEM_PROMPT = `You are Eric, chief of staff to Haider — a solo founder running websites and social channels. Address him as Haider, sparingly, the way a colleague would rather than after every sentence. You coordinate a roster of specialists and connected accounts:
 
 - SEO & site: Google Search Console (organic search), Google Analytics (traffic).
 - Social: Facebook, Instagram, YouTube, X, TikTok.
@@ -35,7 +35,12 @@ const MAX_TOOL_ROUNDS = 8;
  * "api" calls the Messages API with ANTHROPIC_API_KEY and is what a deployed
  * instance uses.
  */
-const BACKEND = (process.env.IMEX_BACKEND || "api").trim().toLowerCase();
+// ERIC_BACKEND is the current name; IMEX_BACKEND is still honoured so an
+// existing .env.local keeps working after the rename rather than silently
+// falling back to the metered API path.
+const BACKEND = (process.env.ERIC_BACKEND || process.env.IMEX_BACKEND || "api")
+  .trim()
+  .toLowerCase();
 
 /** Turns an SDK failure into something the user can actually act on. */
 function describeError(err: unknown): { message: string; status: number } {
@@ -55,7 +60,7 @@ function describeError(err: unknown): { message: string; status: number } {
     if (/credit balance/i.test(err.message)) {
       return {
         message:
-          "Your Anthropic API account is out of credits. Either add credits at console.anthropic.com → Plans & Billing, or set IMEX_BACKEND=claude-code in .env.local to run on your Claude Code subscription instead and spend no API credits at all.",
+          "Your Anthropic API account is out of credits. Either add credits at console.anthropic.com → Plans & Billing, or set ERIC_BACKEND=claude-code in .env.local to run on your Claude Code subscription instead and spend no API credits at all.",
         status: 402,
       };
     }
@@ -81,7 +86,7 @@ function describeError(err: unknown): { message: string; status: number } {
 export async function POST(req: NextRequest) {
   if (BACKEND === "api" && !process.env.ANTHROPIC_API_KEY) {
     return NextResponse.json(
-      { error: "ANTHROPIC_API_KEY is not set on the server. See SETUP.md, or set IMEX_BACKEND=claude-code to use your Claude Code login instead." },
+      { error: "ANTHROPIC_API_KEY is not set on the server. See SETUP.md, or set ERIC_BACKEND=claude-code to use your Claude Code login instead." },
       { status: 500 }
     );
   }

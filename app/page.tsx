@@ -43,7 +43,7 @@ export default function Home() {
           background: "#00e5ff",
         }}
       >
-        Talk to Imex ↗
+        Talk to Eric ↗
       </Link>
     </main>
   );

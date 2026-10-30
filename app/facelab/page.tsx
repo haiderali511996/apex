@@ -202,7 +202,7 @@ export default function FaceLab() {
 
   return (
     <main style={{ width: "100vw", height: "100vh", background: "#0b1a26" }}>
-      {/* Sized explicitly, as ImexHologram does. */}
+      {/* Sized explicitly, as EricHologram does. */}
       <Canvas
         camera={{ position: [0, 0, 2.5], fov: 40 }}
         gl={{ antialias: true }}

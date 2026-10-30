@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Imex's face, as a hologram.
+ * Eric's face, as a hologram.
  *
  * Six stages assemble in sequence on mount — silhouette, contour grid, facial
  * geometry, amber core, throat circuitry, particles and rim — and then the
@@ -82,7 +82,7 @@ function Scene({
   );
 }
 
-export default function ImexHologram({
+export default function EricHologram({
   voiceState,
   onClose,
 }: {

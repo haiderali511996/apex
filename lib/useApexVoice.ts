@@ -36,15 +36,15 @@ export function speechSupported(): boolean {
 
 /**
  * Wake phrases that hand the rest of the sentence straight to the agent, so
- * "Hello Imex, how's my SEO?" is one uninterrupted request rather than a
- * wake-up followed by a second turn. Longest first: "hey imex" must not match
- * before "hello imex" and swallow the wrong prefix.
+ * "Hello Eric, how's my SEO?" is one uninterrupted request rather than a
+ * wake-up followed by a second turn. Longest first: "hey eric" must not match
+ * before "hello eric" and swallow the wrong prefix.
  *
- * "Imex" isn't a dictionary word, so recognizers routinely hear it as "IMAX",
- * "I max", "eemex" or plain "Apex". Those spellings are accepted too —
- * otherwise the wake word would fail for reasons the user can't see or fix.
+ * "Eric" is a common name, so recognizers handle it far better than the old
+ * one did — but they still differ on the spelling, so the usual variants are
+ * accepted too.
  */
-const NAMES = ["imex", "imax", "i max", "eemex", "emex", "apex"];
+const NAMES = ["eric", "erik", "erick", "aric", "erica"];
 const GREETINGS = ["hello", "hey", "hi", "ok", "okay"];
 const WAKE_PHRASES = [
   ...GREETINGS.flatMap((g) => NAMES.map((n) => `${g} ${n}`)),
@@ -390,7 +390,7 @@ export function useApexVoice(options: {
    * Background listener for the wake phrase. It runs its own recognizer in
    * interim mode and restarts itself whenever the browser ends the session
    * (Chrome stops it every ~60s, and on every result), so saying
-   * "Hello Imex" works without touching anything.
+   * "Hello Eric" works without touching anything.
    */
   const stopWakeWord = useCallback(() => {
     wakeWantedRef.current = false;

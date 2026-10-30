@@ -28,7 +28,7 @@ let active: SpeechSynthesisUtterance | null = null;
  * fine. Once that has been seen, stop attaching voice objects for the rest of
  * the session and steer the accent with `lang` instead, which does work.
  */
-const NAMED_VOICE_BROKEN_KEY = "imex.namedVoiceBroken";
+const NAMED_VOICE_BROKEN_KEY = "eric.namedVoiceBroken";
 
 function namedVoicesBroken(): boolean {
   try {
