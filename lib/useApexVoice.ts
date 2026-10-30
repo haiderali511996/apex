@@ -7,49 +7,11 @@ import { speakText, cancelSpeech, speechAvailable } from "./speech";
 export type VoiceState = "idle" | "listening" | "thinking" | "speaking";
 export type ChatMessage = { role: "user" | "assistant"; content: string };
 
-// Minimal shape of the non-standard Web Speech API — no official TS lib types ship for it.
-type SpeechRecognitionLike = {
-  continuous: boolean;
-  interimResults: boolean;
-  lang: string;
-  onresult: ((e: { results: { 0: { transcript: string } }[] }) => void) | null;
-  onerror: ((e: { error?: string }) => void) | null;
-  onend: (() => void) | null;
-  start: () => void;
-  stop: () => void;
-};
-
-type RecognitionCtor = new () => SpeechRecognitionLike;
-
-function getRecognitionCtor(): RecognitionCtor | undefined {
-  if (typeof window === "undefined") return undefined;
-  const w = window as unknown as {
-    SpeechRecognition?: RecognitionCtor;
-    webkitSpeechRecognition?: RecognitionCtor;
-  };
-  return w.SpeechRecognition || w.webkitSpeechRecognition;
-}
+import { getRecognitionCtor, VoiceRecognition, type InputStatus } from "./voiceRecognition";
 
 export function speechSupported(): boolean {
   return Boolean(getRecognitionCtor());
 }
-
-/**
- * Wake phrases that hand the rest of the sentence straight to the agent, so
- * "Hello Imex, how's my SEO?" is one uninterrupted request rather than a
- * wake-up followed by a second turn. Longest first: "hey imex" must not match
- * before "hello imex" and swallow the wrong prefix.
- *
- * "Imex" isn't a dictionary word, so recognizers routinely hear it as "IMAX",
- * "I max", "eemex" or plain "Apex". Those spellings are accepted too —
- * otherwise the wake word would fail for reasons the user can't see or fix.
- */
-const NAMES = ["imex", "imax", "i max", "eemex", "emex", "apex"];
-const GREETINGS = ["hello", "hey", "hi", "ok", "okay"];
-const WAKE_PHRASES = [
-  ...GREETINGS.flatMap((g) => NAMES.map((n) => `${g} ${n}`)),
-  ...NAMES,
-];
 
 /** Where the chosen voice is remembered between visits. */
 export const VOICE_STORAGE_KEY = "apex.voice";
@@ -109,24 +71,12 @@ export function pickVoice(): SpeechSynthesisVoice | null {
   return voices.find((v) => v.lang?.startsWith("en") && v.localService) ?? voices.find((v) => v.lang?.startsWith("en")) ?? null;
 }
 
-/** Returns whatever followed the wake phrase, or null when none was said. */
-function matchWake(transcript: string): string | null {
-  const normalized = transcript.toLowerCase().replace(/[.,!?]/g, " ").replace(/\s+/g, " ").trim();
-  for (const phrase of WAKE_PHRASES) {
-    if (normalized === phrase) return "";
-    if (normalized.startsWith(phrase + " ")) return transcript.trim().slice(phrase.length).replace(/^[\s,.!?]+/, "");
-  }
-  return null;
-}
-
 /**
  * The single voice + chat loop shared by the orb and the chat panel, so both
  * drive the same conversation rather than keeping two rival copies of it.
  */
 export function useApexVoice(options: {
   speak?: boolean;
-  wakeWord?: boolean;
-  continuous?: boolean;
   /**
    * Handles commands about the interface itself ("show your face"). Return the
    * line to say back and the request never reaches the agent — the screen
@@ -135,33 +85,28 @@ export function useApexVoice(options: {
   onLocalCommand?: (text: string) => string | null | Promise<string | null>;
 } = {}) {
   const speakEnabled = options.speak ?? true;
-  // After a reply finishes, open the mic again so a follow-up needs no tap.
-  const continuous = options.continuous ?? true;
-  const continuousRef = useRef(continuous);
-  continuousRef.current = continuous;
-
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [state, setState] = useState<VoiceState>("idle");
   const [pendingActions, setPendingActions] = useState<PendingAction[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [wakeWordOn, setWakeWordOn] = useState(false);
   // The reply being spoken, and how much of it has been voiced so far.
   const [spokenText, setSpokenText] = useState("");
   const [spokenChars, setSpokenChars] = useState(0);
 
-  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
-  const wakeRef = useRef<SpeechRecognitionLike | null>(null);
-  // Lets the wake listener's restart loop know whether it's still wanted,
-  // without re-creating the listener every time it fires.
-  const wakeWantedRef = useRef(false);
+  const mountedRef = useRef(true);
+  const inputRef = useRef<VoiceRecognition | null>(null);
+  const [inputStatus, setInputStatus] = useState<InputStatus>("off");
+  const [heardText, setHeardText] = useState("");
+  const speechGenerationRef = useRef(0);
+  const sendRef = useRef<(text: string) => void>(() => {});
   const stateRef = useRef<VoiceState>("idle");
-  stateRef.current = state;
+  const setVoiceState = useCallback((value: VoiceState) => {
+    stateRef.current = value;
+    setState(value);
+  }, []);
   // The send loop reads history through a ref so a reply can't race a stale copy.
   const messagesRef = useRef<ChatMessage[]>([]);
   messagesRef.current = messages;
-  // send() re-opens the mic once a reply finishes, but startListening() is
-  // defined in terms of send(). A ref breaks that cycle.
-  const startListeningRef = useRef<() => void>(() => {});
   // Read through a ref so a new handler doesn't rebuild the whole send loop.
   const localCommandRef = useRef(options.onLocalCommand);
   localCommandRef.current = options.onLocalCommand;
@@ -188,10 +133,15 @@ export function useApexVoice(options: {
 
   const speak = useCallback(
     (text: string, onDone?: () => void) => {
+      inputRef.current?.setMode(null);
+      const generation = ++speechGenerationRef.current;
       stopReveal();
       setSpokenText(text);
 
+      let finished = false;
       const finish = () => {
+        if (finished || generation !== speechGenerationRef.current) return;
+        finished = true;
         stopReveal();
         setRevealed(text.length);
         onDone?.();
@@ -204,23 +154,29 @@ export function useApexVoice(options: {
 
       setRevealed(0);
 
-      // The paced reveal runs regardless, so a silent browser still shows the
-      // reply arriving word by word rather than freezing on an empty caption.
-      const tick = 60;
-      revealTimer.current = setInterval(() => {
-        const next = Math.min(revealedRef.current + (CHARS_PER_SEC * tick) / 1000, text.length);
-        setRevealed(next);
-        if (next >= text.length) stopReveal();
-      }, tick);
-
+      // Captions begin with actual playback, never while TTS is loading.
       speakText(text, pickVoice(), {
+        onStart: (hasAlignment) => {
+          if (generation !== speechGenerationRef.current || hasAlignment) return;
+          const tick = 60;
+          revealTimer.current = setInterval(() => {
+            const next = Math.min(revealedRef.current + (CHARS_PER_SEC * tick) / 1000, text.length);
+            setRevealed(next);
+            if (next >= text.length) stopReveal();
+          }, tick);
+        },
+        onWarning: reason => {
+          if (generation === speechGenerationRef.current) setError(reason);
+        },
         onBoundary: (charIndex, charLength) => {
+          if (generation !== speechGenerationRef.current) return;
           const end = charIndex + charLength;
           if (end > revealedRef.current) setRevealed(Math.min(end, text.length));
         },
         onEnd: finish,
         // Speech is a nicety; the text must survive any failure in it.
         onError: (reason) => {
+          if (generation !== speechGenerationRef.current) return;
           finish();
           if (reason === "silent") {
             setError("No audio came out — check the tab isn't muted and your volume is up. The reply is above.");
@@ -238,9 +194,15 @@ export function useApexVoice(options: {
   const send = useCallback(
     async (text: string) => {
       const trimmed = text.trim();
-      if (!trimmed) return;
-
+      if (!trimmed || stateRef.current === "thinking") return;
+      speechGenerationRef.current++;
+      cancelSpeech();
+      stopReveal();
+      inputRef.current?.setMode(null);
+      setVoiceState("thinking");
+      setHeardText(trimmed);
       const next = [...messagesRef.current, { role: "user" as const, content: trimmed }];
+      messagesRef.current = next;
       setMessages(next);
       setError(null);
 
@@ -252,17 +214,17 @@ export function useApexVoice(options: {
       } catch (err) {
         localReply = err instanceof Error ? err.message : "That didn't work.";
       }
+      if (!mountedRef.current) return;
       if (localReply) {
         setMessages((m) => [...m, { role: "assistant", content: localReply }]);
-        setState("speaking");
+        setVoiceState("speaking");
         speak(localReply, () => {
-          setState("idle");
-          if (continuousRef.current) setTimeout(() => startListeningRef.current(), 450);
+          setVoiceState("idle");
         });
         return;
       }
 
-      setState("thinking");
+      setVoiceState("thinking");
 
       // Only the request itself is guarded here. Rendering and speaking the
       // reply must not be able to masquerade as a network failure.
@@ -275,13 +237,15 @@ export function useApexVoice(options: {
         });
         data = await res.json();
       } catch {
+        if (!mountedRef.current) return;
         const message = "I couldn't reach the server. Is it running?";
         setMessages((m) => [...m, { role: "assistant", content: message }]);
         setError(message);
-        setState("idle");
+        setVoiceState("idle");
         return;
       }
 
+      if (!mountedRef.current) return;
       const reply: string = data.reply || data.error || "Something went wrong.";
       if (data.error) setError(data.error);
 
@@ -290,180 +254,45 @@ export function useApexVoice(options: {
         setPendingActions((prev) => [...(data.pendingActions ?? []), ...prev]);
       }
 
-      setState("speaking");
+      setVoiceState("speaking");
       speak(reply, () => {
-        setState("idle");
-        // Hand the mic straight back so the next command needs no tap. The
-        // short pause keeps the recognizer from catching the tail of the
-        // reply through the speakers.
-        if (continuousRef.current && !data.error) {
-          setTimeout(() => startListeningRef.current(), 450);
-        }
+        setVoiceState("idle");
       });
     },
-    [speak]
+    [speak, setVoiceState, stopReveal]
   );
 
+  sendRef.current = send;
+
   const stopListening = useCallback(() => {
-    recognitionRef.current?.stop();
-    recognitionRef.current = null;
-    setState((s) => (s === "listening" ? "idle" : s));
-  }, []);
+    inputRef.current?.setMode(null);
+    if (stateRef.current === "listening") setVoiceState("idle");
+  }, [setVoiceState]);
 
   const startListening = useCallback(() => {
-    const Ctor = getRecognitionCtor();
-    if (!Ctor) {
-      setError("Voice input isn't supported in this browser — try Chrome, or type instead.");
+    if (!inputRef.current) {
+      setError("Voice input isn't supported in this browser. Use Chrome or type in the chat.");
       return;
     }
-    cancelSpeech();
+    // Invalidate speech completion before canceling so it cannot reopen the mic.
+    speechGenerationRef.current++;
+    cancelSpeech(); stopReveal();
+    setError(null); setHeardText("");
+    setVoiceState("listening");
+    inputRef.current.setMode("command");
+  }, [setVoiceState, stopReveal]);
 
-    const recognition = new Ctor();
-    recognition.continuous = false;
-    recognition.interimResults = false;
-    recognition.lang = "en-US";
-    recognition.onresult = (e) => {
-      const transcript = e.results?.[e.results.length - 1]?.[0]?.transcript;
-      recognitionRef.current = null;
-      if (transcript) send(transcript);
-      else setState("idle");
-    };
-    recognition.onerror = (e) => {
-      recognitionRef.current = null;
-      // Silence after a reply is the normal end of a hands-free exchange, not
-      // a failure — drop back to the wake word without scolding the user.
-      if (e.error === "no-speech" && continuousRef.current) {
-        setState("idle");
-        return;
-      }
-      setError(
-        e.error === "not-allowed"
-          ? "Microphone access was blocked. Allow it in your browser's site settings, then reload."
-          : e.error === "no-speech"
-          ? "I didn't catch anything — tap and try again."
-          : "Voice input failed. Check your microphone and try again."
-      );
-      setState("idle");
-    };
-    recognition.onend = () => {
-      // Only fall back to idle if no transcript moved us on to thinking.
-      setState((s) => (s === "listening" ? "idle" : s));
-    };
-
-    recognitionRef.current = recognition;
-    setError(null);
-    setState("listening");
-    try {
-      recognition.start();
-    } catch {
-      recognitionRef.current = null;
-      setError("Couldn't start listening — is another tab already using the microphone?");
-      setState("idle");
-    }
-  }, [send]);
-
-  startListeningRef.current = startListening;
-
-  /** Cuts the voice off mid-sentence and settles the caption where it stopped. */
   const stopSpeaking = useCallback(() => {
-    cancelSpeech();
-    stopReveal();
-    setState((s) => (s === "speaking" ? "idle" : s));
-  }, [stopReveal]);
+    speechGenerationRef.current++;
+    cancelSpeech(); stopReveal();
+    if (stateRef.current === "speaking") setVoiceState("idle");
+  }, [stopReveal, setVoiceState]);
 
-  /** One tap: start listening, or stop whatever is currently happening. */
   const toggle = useCallback(() => {
-    if (state === "listening") {
-      stopListening();
-      return;
-    }
-    if (state === "speaking") {
-      cancelSpeech();
-      setState("idle");
-      return;
-    }
-    if (state === "thinking") return;
+    if (stateRef.current === "listening") { stopListening(); return; }
+    if (stateRef.current === "thinking") return;
     startListening();
-  }, [state, startListening, stopListening]);
-
-  /**
-   * Background listener for the wake phrase. It runs its own recognizer in
-   * interim mode and restarts itself whenever the browser ends the session
-   * (Chrome stops it every ~60s, and on every result), so saying
-   * "Hello Imex" works without touching anything.
-   */
-  const stopWakeWord = useCallback(() => {
-    wakeWantedRef.current = false;
-    setWakeWordOn(false);
-    try { wakeRef.current?.stop(); } catch { /* already stopped */ }
-    wakeRef.current = null;
-  }, []);
-
-  const startWakeWord = useCallback(() => {
-    const Ctor = getRecognitionCtor();
-    if (!Ctor) {
-      setError("Wake word needs the Web Speech API — try Chrome.");
-      return;
-    }
-    if (wakeWantedRef.current) return;
-    wakeWantedRef.current = true;
-    setWakeWordOn(true);
-
-    const spawn = () => {
-      if (!wakeWantedRef.current) return;
-      // Never run the wake listener while the main recognizer holds the mic,
-      // or the two fight over it and Chrome aborts both.
-      if (stateRef.current !== "idle") {
-        setTimeout(spawn, 700);
-        return;
-      }
-
-      const recognition = new Ctor();
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      recognition.lang = "en-US";
-
-      recognition.onresult = (e) => {
-        const results = e.results as unknown as ArrayLike<{ 0: { transcript: string }; isFinal?: boolean }>;
-        for (let i = 0; i < results.length; i++) {
-          const transcript = results[i]?.[0]?.transcript ?? "";
-          const rest = matchWake(transcript);
-          if (rest === null) continue;
-
-          try { recognition.stop(); } catch { /* already stopping */ }
-          wakeRef.current = null;
-          // With a question attached, send it straight through; a bare
-          // "Hello Apex" just opens the mic for what comes next.
-          if (rest) send(rest);
-          else startListening();
-          return;
-        }
-      };
-      recognition.onerror = (e) => {
-        // "no-speech"/"aborted" are the normal idle outcomes — keep waiting.
-        if (e.error === "not-allowed") {
-          wakeWantedRef.current = false;
-          setWakeWordOn(false);
-          setError("Microphone access was blocked, so the wake word can't listen. Allow it in your browser's site settings.");
-        }
-      };
-      recognition.onend = () => {
-        wakeRef.current = null;
-        if (wakeWantedRef.current) setTimeout(spawn, 400);
-      };
-
-      wakeRef.current = recognition;
-      try {
-        recognition.start();
-      } catch {
-        setTimeout(spawn, 800);
-      }
-    };
-
-    spawn();
-    // send/startListening are stable callbacks; spawn re-reads them on each restart.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [send, startListening]);
+  }, [startListening, stopListening]);
 
   const refreshPending = useCallback(async () => {
     try {
@@ -498,8 +327,8 @@ export function useApexVoice(options: {
             ? `That failed: ${action.result}`
             : "Okay, I won't do that.";
         setMessages((m) => [...m, { role: "assistant", content: summary }]);
-        setState("speaking");
-        speak(summary, () => setState("idle"));
+        setVoiceState("speaking");
+        speak(summary, () => setVoiceState("idle"));
       } catch {
         setMessages((m) => [...m, { role: "assistant", content: "Couldn't reach the server to confirm that." }]);
       }
@@ -517,23 +346,29 @@ export function useApexVoice(options: {
     return () => window.speechSynthesis.removeEventListener?.("voiceschanged", onVoices);
   }, []);
 
-  // Opt in from the caller; the mic only opens once the browser grants it.
-  const wantWakeWord = options.wakeWord ?? false;
+  // The recognizer starts only through an explicit microphone button press.
   useEffect(() => {
-    if (!wantWakeWord) return;
-    startWakeWord();
-    return () => stopWakeWord();
-  }, [wantWakeWord, startWakeWord, stopWakeWord]);
-
-  useEffect(() => {
+    mountedRef.current = true;
+    const Ctor = getRecognitionCtor();
+    if (Ctor) inputRef.current = new VoiceRecognition(Ctor, {
+      status: status => {
+        setInputStatus(status);
+        if (status === "off" && stateRef.current === "listening") setVoiceState("idle");
+        if (status === "listening" && stateRef.current === "idle") setVoiceState("listening");
+      },
+      interim: setHeardText,
+      transcript: text => { void sendRef.current(text); },
+      error: message => {
+        setError(message); setVoiceState("idle");
+      },
+    });
     return () => {
-      wakeWantedRef.current = false;
-      try { wakeRef.current?.stop(); } catch { /* already stopped */ }
-      recognitionRef.current?.stop();
-      stopReveal();
-      cancelSpeech();
+      mountedRef.current = false;
+      speechGenerationRef.current++;
+      inputRef.current?.dispose(); inputRef.current = null;
+      stopReveal(); cancelSpeech();
     };
-  }, [stopReveal]);
+  }, [stopReveal, setVoiceState]);
 
   return {
     messages,
@@ -547,9 +382,8 @@ export function useApexVoice(options: {
     stopListening,
     refreshPending,
     respondToAction,
-    wakeWordOn,
-    startWakeWord,
-    stopWakeWord,
+    inputStatus,
+    heardText,
     stopSpeaking,
     /** How far the voice has got through the reply, in characters. */
     spokenChars: Math.floor(spokenChars),

@@ -1,10 +1,11 @@
+import { BACKEND, generateGemini, geminiText, GeminiError } from "@/lib/agent/gemini";
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { anthropicClient, MODEL } from "@/lib/agent/anthropicClient";
 
 export const runtime = "nodejs";
 
-const SYSTEM = `You are Imex, looking through Haider's webcam. Describe what you actually see in one or two short spoken sentences — this is read aloud, so no lists and no preamble.
+const SYSTEM = `You are Nova, looking through Haider's webcam. Describe what you actually see in one or two short spoken sentences — this is read aloud, so no lists and no preamble.
 
 If you see a person, greet them naturally and say something specific and true about the scene (the room, the light, what they're wearing or doing). Assume the person is Haider unless the image clearly shows several people. If the frame is dark, empty or unreadable, say so plainly rather than inventing a description. Never guess at age, ethnicity, mood, health, or anything else the image doesn't actually show.`;
 
@@ -16,7 +17,7 @@ function parseDataUrl(input: string): { mediaType: string; data: string } | null
 }
 
 export async function POST(req: NextRequest) {
-  if (!process.env.ANTHROPIC_API_KEY) {
+  if (BACKEND !== "gemini" && !process.env.ANTHROPIC_API_KEY) {
     return NextResponse.json({ error: "ANTHROPIC_API_KEY is not set on the server. See SETUP.md." }, { status: 500 });
   }
 
@@ -32,6 +33,13 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    if (BACKEND === "gemini") {
+      const response = await generateGemini(SYSTEM, [{ role: "user", parts: [
+        { inlineData: { mimeType: parsed.mediaType, data: parsed.data } },
+        { text: prompt || "What do you see right now?" },
+      ] }]);
+      return NextResponse.json({ reply: geminiText(response) });
+    }
     const anthropic = anthropicClient();
     const response = await anthropic.messages.create({
       model: MODEL,
@@ -65,6 +73,6 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[agent/see]", err);
-    return NextResponse.json({ error: `I couldn't look at that: ${message}` }, { status: 502 });
+    return NextResponse.json({ error: `I couldn't look at that: ${message}` }, { status: err instanceof GeminiError ? err.status : 502 });
   }
 }

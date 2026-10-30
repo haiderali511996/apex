@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { V, heightAt } from "./geometry";
 
 export const COLORS = {
-  bg: "#071726",
+  bg: "#020d19",
   cyan: "#00E5F0",
   cyanHi: "#B9FFFF",
   amber: "#F5A400",
@@ -87,8 +87,9 @@ export function makeShellMaterial(): THREE.ShaderMaterial {
         float rim = pow(f, 2.6);
         vec3 col = mix(uCyan, uCyanHi, pow(f, 6.0));
         // A near-black body keeps the far side of the contours hidden.
-        vec3 body = uBg * 0.55;
-        gl_FragColor = vec4(body + col * rim * 1.5, (0.55 + rim * 0.45) * uReveal);
+        float key = max(0.0, dot(normalize(vN), normalize(vec3(0.3, 0.6, 1.0))));
+        vec3 body = uBg * 0.42 + uCyan * key * 0.012;
+        gl_FragColor = vec4(body + col * rim * 1.5, uReveal);
       }
     `,
   });
@@ -107,6 +108,7 @@ export function makeContourMaterial(): THREE.ShaderMaterial {
       uTurn: { value: new THREE.Vector2() },
       uReveal: { value: 0 },
       uBuild: { value: 0 },
+      uFaceReveal: { value: 0 },
       uScan: { value: 0 },
       uCyan: { value: new THREE.Color(COLORS.cyan) },
       uCyanHi: { value: new THREE.Color(COLORS.cyanHi) },
@@ -114,14 +116,17 @@ export function makeContourMaterial(): THREE.ShaderMaterial {
     vertexShader: /* glsl */ `
       ${HEAD_TURN_GLSL}
       attribute float aV;
+      attribute vec3 aFaceOffset;
+      attribute vec3 aFaceNormal;
+      uniform float uFaceReveal;
       varying float vV;
       varying float vFres;
       varying float vLight;
       void main() {
         vV = aV;
-        vec3 p = applyHeadTurn(position);
+        vec3 p = applyHeadTurn(position + aFaceOffset * uFaceReveal);
         vec4 mv = modelViewMatrix * vec4(p, 1.0);
-        vec3 n = normalize(normalMatrix * normal);
+        vec3 n = normalize(normalMatrix * normalize(mix(normal, aFaceNormal, uFaceReveal)));
         vec3 view = normalize(-mv.xyz);
 
         // Rim: lines turning away from the camera brighten, giving depth.
@@ -135,6 +140,7 @@ export function makeContourMaterial(): THREE.ShaderMaterial {
     `,
     fragmentShader: /* glsl */ `
       uniform float uBuild;
+      uniform float uFaceReveal;
       uniform float uScan;
       uniform float uReveal;
       uniform vec3 uCyan;
@@ -151,10 +157,11 @@ export function makeContourMaterial(): THREE.ShaderMaterial {
         float band = exp(-pow((fract(vV - uScan) - 0.5) * 6.0, 2.0));
 
         float edge = pow(clamp(vFres, 0.0, 1.0), 1.7);
-        float lit = 0.30 + vLight * 0.95;
+        float lit = 0.12 + vLight * 0.65;
 
         vec3 col = mix(uCyan, uCyanHi, clamp(edge * 0.7 + vLight * 0.45 + band * 0.4, 0.0, 1.0));
-        float a = (0.10 + edge * 0.55 + lit * 0.42 + band * 0.3) * uReveal;
+        float faceLight = uFaceReveal * 0.08;
+        float a = (0.10 + edge * 0.46 + lit * 0.36 + band * 0.10 + faceLight) * uReveal;
         gl_FragColor = vec4(col * (0.45 + lit * 0.7 + band * 0.7), a);
       }
     `,

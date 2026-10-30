@@ -17,10 +17,18 @@
  * pretending it worked.
  */
 
+import { updateSpeechMotion, resetSpeechMotion } from "./speechMotion";
 import { speakNeural, cancelNeuralSpeech, neuralVoiceRuledOut, neuralVoiceReason } from "./neuralVoice";
 
 // (3) — a module-level reference keeps the utterance alive while it speaks.
 let active: SpeechSynthesisUtterance | null = null;
+let speechVersion = 0;
+let motionTimer: ReturnType<typeof setInterval> | null = null;
+function stopMotion() {
+  if (motionTimer) clearInterval(motionTimer);
+  motionTimer = null;
+  resetSpeechMotion();
+}
 
 /**
  * Chrome on macOS accepts an utterance with a named voice attached, reports
@@ -47,7 +55,8 @@ function markNamedVoicesBroken() {
 }
 
 export type SpeakHandlers = {
-  onStart?: () => void;
+  onStart?: (hasAlignment?: boolean) => void;
+  onWarning?: (reason: string) => void;
   onBoundary?: (charIndex: number, charLength: number) => void;
   onEnd?: () => void;
   onError?: (reason: string) => void;
@@ -64,6 +73,8 @@ export function speechAvailable(): boolean {
 }
 
 export function cancelSpeech() {
+  speechVersion++;
+  stopMotion();
   cancelNeuralSpeech();
   if (!synthAvailable()) return;
   try {
@@ -87,18 +98,23 @@ export function speakText(
   voice: SpeechSynthesisVoice | null,
   handlers: SpeakHandlers = {}
 ): void {
+  cancelSpeech();
+  const version = speechVersion;
   if (neuralVoiceRuledOut()) {
+    const reason = neuralVoiceReason();
+    if (reason) handlers.onWarning?.(`${reason} Using the system voice for this reply.`);
     speakViaSynth(text, voice, handlers);
     return;
   }
 
   void speakNeural(text, handlers).then((spoke) => {
-    if (spoke) return;
+    if (spoke || version !== speechVersion) return;
     // The system voice is the fallback, and on some machines it is silent
     // too. When both fail, the useful thing to report is why the neural
     // voice didn't run — "check your volume" sends the user hunting for a
     // problem that isn't there.
     const why = neuralVoiceReason();
+    if (why) handlers.onWarning?.(`${why} Using the system voice for this reply.`);
     speakViaSynth(text, voice, {
       ...handlers,
       onError: (reason) => handlers.onError?.(reason === "silent" && why ? why : reason),
@@ -118,6 +134,7 @@ function speakViaSynth(
     return;
   }
 
+  const version = speechVersion;
   const synth = window.speechSynthesis;
   try {
     synth.cancel();
@@ -127,6 +144,7 @@ function speakViaSynth(
 
   // (2) — start on a later tick so the cancel above can't swallow this one.
   setTimeout(() => {
+    if (version !== speechVersion) return;
     try {
       const utter = new SpeechSynthesisUtterance(text);
       // Always steer the accent with lang — that part works everywhere.
@@ -146,14 +164,19 @@ function speakViaSynth(
       let started = false;
       utter.onstart = () => {
         started = true;
+        stopMotion();
+        const began = Date.now();
+        motionTimer = setInterval(() => updateSpeechMotion(text, (Date.now() - began) / 1000, null), 33);
         handlers.onStart?.();
       };
       utter.onboundary = (e) => handlers.onBoundary?.(e.charIndex, e.charLength ?? 0);
       utter.onend = () => {
+        stopMotion();
         active = null;
         handlers.onEnd?.();
       };
       utter.onerror = (e) => {
+        stopMotion();
         active = null;
         const reason = (e as SpeechSynthesisErrorEvent).error || "unknown";
         // "interrupted"/"canceled" are ordinary — we stopped it on purpose.
@@ -176,7 +199,7 @@ function speakViaSynth(
       // sets speaking = true even when the named voice produces nothing, so
       // that flag is deliberately not consulted here.
       setTimeout(() => {
-        if (started) return;
+        if (started || active !== utter || version !== speechVersion) return;
 
         if (attachVoice) {
           // The named voice is the problem, not the audio path. Remember it

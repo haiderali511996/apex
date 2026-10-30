@@ -11,6 +11,7 @@
  * upstream of here keeps working unchanged.
  */
 
+import { updateSpeechMotion, resetSpeechMotion } from "./speechMotion";
 import type { SpeakHandlers } from "./speech";
 
 type Alignment = {
@@ -47,8 +48,12 @@ let audio: HTMLAudioElement | null = null;
 let objectUrl: string | null = null;
 let frame = 0;
 let abort: AbortController | null = null;
+let finishCanceled: (() => void) | null = null;
 
 export function cancelNeuralSpeech() {
+  resetSpeechMotion();
+  finishCanceled?.();
+  finishCanceled = null;
   if (frame) cancelAnimationFrame(frame);
   frame = 0;
   abort?.abort();
@@ -99,7 +104,9 @@ export async function speakNeural(text: string, handlers: SpeakHandlers): Promis
   if (available === "no") return false;
 
   cancelNeuralSpeech();
-  abort = new AbortController();
+  const controller = new AbortController();
+  abort = controller;
+  const requestTimeout = setTimeout(() => controller.abort("timeout"), 15000);
 
   let payload: TtsResponse;
   try {
@@ -107,9 +114,10 @@ export async function speakNeural(text: string, handlers: SpeakHandlers): Promis
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ text }),
-      signal: abort.signal,
+      signal: controller.signal,
     });
 
+    if (controller !== abort) return true;
     if (res.status === 503) {
       const body = (await res.json().catch(() => ({}))) as { error?: string };
       available = "no";
@@ -125,15 +133,53 @@ export async function speakNeural(text: string, handlers: SpeakHandlers): Promis
     }
     payload = (await res.json()) as TtsResponse;
   } catch (err) {
-    if ((err as Error)?.name === "AbortError") return true; // we stopped it
+    if (controller !== abort) return true; // deliberately canceled
+    if (controller.signal.aborted) {
+      unavailableReason = "Speech generation timed out.";
+      return false;
+    }
     unavailableReason = err instanceof Error ? err.message : String(err);
     return false;
+  } finally {
+    clearTimeout(requestTimeout);
   }
 
+  if (controller !== abort) return true;
+  if (!payload.audioBase64) {
+    unavailableReason = "The speech service returned no audio.";
+    return false;
+  }
   available = "yes";
   unavailableReason = "";
 
   return new Promise<boolean>((resolve) => {
+    let settled = false;
+    const finish = (value: boolean) => {
+      if (settled) return;
+      settled = true;
+      resetSpeechMotion();
+      clearTimeout(startTimeout);
+      finishCanceled = null;
+      if (frame) cancelAnimationFrame(frame);
+      frame = 0;
+      if (audio) {
+        audio.onplaying = audio.onended = audio.onerror = null;
+        audio.pause();
+        audio.src = "";
+        audio = null;
+      }
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      objectUrl = null;
+      resolve(value);
+    };
+    const startTimeout = setTimeout(() => {
+      if (settled) return;
+      unavailableReason = "Audio did not start. Click Test Sound to enable playback, and check that the tab is unmuted.";
+      if (audio) audio.pause();
+      finish(false);
+    }, 10_000);
+    finishCanceled = () => finish(true);
+
     const blob = base64ToBlob(payload.audioBase64, payload.mimeType || "audio/mpeg");
     objectUrl = URL.createObjectURL(blob);
     const el = new Audio(objectUrl);
@@ -145,6 +191,8 @@ export async function speakNeural(text: string, handlers: SpeakHandlers): Promis
     const tick = () => {
       if (audio !== el) return;
       const t = el.currentTime;
+      if (!el.paused && !el.ended && !(el.readyState < 3)) updateSpeechMotion(text, t, payload.alignment, el.duration);
+      else resetSpeechMotion();
       while (next < cues.length && cues[next].at <= t) {
         handlers.onBoundary?.(cues[next].charIndex, cues[next].charLength);
         next++;
@@ -153,7 +201,9 @@ export async function speakNeural(text: string, handlers: SpeakHandlers): Promis
     };
 
     el.onplaying = () => {
-      handlers.onStart?.();
+      clearTimeout(startTimeout);
+      if (frame) cancelAnimationFrame(frame);
+      handlers.onStart?.(cues.length > 0);
       frame = requestAnimationFrame(tick);
     };
     el.onended = () => {
@@ -166,13 +216,13 @@ export async function speakNeural(text: string, handlers: SpeakHandlers): Promis
         next++;
       }
       handlers.onEnd?.();
-      resolve(true);
+      finish(true);
     };
     el.onerror = () => {
       if (frame) cancelAnimationFrame(frame);
       frame = 0;
       unavailableReason = "The audio returned by the speech service wouldn't play.";
-      resolve(false);
+      finish(false);
     };
 
     el.play().catch((err: unknown) => {
@@ -184,7 +234,7 @@ export async function speakNeural(text: string, handlers: SpeakHandlers): Promis
         (err as Error)?.name === "NotAllowedError"
           ? "The browser blocked audio until you interact with the page — tap the orb once."
           : "Audio playback failed to start.";
-      resolve(false);
+      finish(false);
     });
   });
 }

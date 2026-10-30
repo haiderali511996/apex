@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { faceZ, headHalfWidth } from "./face";
 
 /**
  * The bust is generated procedurally rather than loaded, so there is no model
@@ -17,15 +18,15 @@ import * as THREE from "three";
 /** Landmarks in v, used by the face and by the shaders' head-turn falloff. */
 export const V = {
   crown: 0.0,
-  brow: 0.20,
-  eyes: 0.245,
-  noseTip: 0.30,
-  mouth: 0.355,
-  chin: 0.40,
-  jawBottom: 0.425,
-  neckTop: 0.43,
-  neckBottom: 0.495,
-  shoulder: 0.62,
+  brow: 0.24,
+  eyes: 0.28,
+  noseTip: 0.36,
+  mouth: 0.445,
+  chin: 0.51,
+  jawBottom: 0.55,
+  neckTop: 0.56,
+  neckBottom: 0.72,
+  shoulder: 0.85,
   bottom: 1.0,
 } as const;
 
@@ -51,8 +52,8 @@ type Profile = [t: number, r: number][];
 
 // An egg roughly 1.5x taller than wide, not a sphere.
 const HEAD_RX: Profile = [
-  [0.00, 0.035], [0.06, 0.20], [0.14, 0.29], [0.25, 0.355], [0.40, 0.392],
-  [0.55, 0.40], [0.70, 0.385], [0.82, 0.34], [0.92, 0.265], [1.00, 0.195],
+  [0.00, 0.008], [0.06, 0.23], [0.14, 0.36], [0.25, 0.425], [0.40, 0.44],
+  [0.55, 0.435], [0.70, 0.41], [0.82, 0.355], [0.92, 0.265], [1.00, 0.17],
 ];
 
 // Rises steeply into the shoulder line, then holds — near-vertical sides
@@ -86,7 +87,7 @@ function section(v: number): { rx: number; rz: number } {
   if (v <= V.neckBottom) {
     const t = (v - V.jawBottom) / (V.neckBottom - V.jawBottom);
     // Starts exactly at the jaw's width, so there is no step at the join.
-    const rx = 0.195 + t * 0.02;
+    const rx = 0.17 + t * 0.045;
     return { rx, rz: rx * 1.2 };
   }
   const t = (v - V.neckBottom) / (V.bottom - V.neckBottom);
@@ -100,40 +101,35 @@ function section(v: number): { rx: number; rz: number } {
  * `s` is the horizontal position across the face, normalised to the section
  * half-width, so features stay put as the head narrows.
  */
+/** Use the existing scanned face field, fitted into the full bust. */
 function faceRelief(v: number, s: number): number {
-  if (v > V.jawBottom + 0.02) return 0;
+  if (v >= V.jawBottom) return 0;
+  const y = 1 - v / V.jawBottom;
+  const hw = headHalfWidth(y);
+  return faceZ(s * hw, y) * 1.55;
+}
+
+/** Bend scan lines in the image plane so facial features read from the front.
+ * Depth alone leaves perfectly horizontal lines when viewed head-on. */
+function contourLift(v: number, s: number): number {
+  const g = (x: number, w: number) => Math.exp(-Math.pow(x / w, 2));
   const ax = Math.abs(s);
-  let d = 0;
-
-  // Brow ridge, heavier towards the middle.
-  d += 0.075 * Math.exp(-Math.pow((v - V.brow) / 0.032, 2)) * (1 - smoothstep(0.55, 1.0, ax));
-
-  // Eye sockets: two recesses either side of the bridge.
-  const eye = Math.exp(-Math.pow((v - V.eyes) / 0.038, 2)) * Math.exp(-Math.pow((ax - 0.44) / 0.24, 2));
-  d -= 0.115 * eye;
-
-  // Nose: a bridge from the brow down to a tip that stands proud.
-  const bridge = smoothstep(V.brow - 0.01, V.noseTip, v) * (1 - smoothstep(V.noseTip, V.noseTip + 0.035, v));
-  d += (0.07 + 0.115 * smoothstep(V.eyes, V.noseTip, v)) * bridge * Math.exp(-Math.pow(ax / 0.17, 2));
-
-  // Under the nose the surface falls back in.
-  d -= 0.03 * Math.exp(-Math.pow((v - (V.noseTip + 0.028)) / 0.018, 2)) * Math.exp(-Math.pow(ax / 0.2, 2));
-
-  // Cheeks.
-  d += 0.05 * Math.exp(-Math.pow((v - 0.30) / 0.055, 2)) * Math.exp(-Math.pow((ax - 0.62) / 0.28, 2));
-
-  // Mouth: a shallow crease with a slight upper-lip swell above it.
-  d -= 0.036 * Math.exp(-Math.pow((v - V.mouth) / 0.013, 2)) * Math.exp(-Math.pow(ax / 0.34, 2));
-  d += 0.016 * Math.exp(-Math.pow((v - (V.mouth - 0.022)) / 0.016, 2)) * Math.exp(-Math.pow(ax / 0.3, 2));
-
-  // Chin.
-  d += 0.042 * Math.exp(-Math.pow((v - V.chin) / 0.03, 2)) * Math.exp(-Math.pow(ax / 0.36, 2));
-
-  return d;
+  return (
+    0.070 * g(v - V.brow, 0.040) * g(ax - 0.42, 0.24)
+    - 0.064 * g(v - V.eyes, 0.032) * g(ax - 0.43, 0.23)
+    + 0.075 * g(v - V.noseTip, 0.055) * g(s, 0.17)
+    - 0.033 * g(v - V.mouth, 0.024) * g(s, 0.38)
+    + 0.025 * g(v - (V.mouth + 0.034), 0.021) * g(s, 0.32)
+  );
 }
 
 /** A point on the bust surface. */
-export function bustPoint(u: number, v: number, target = new THREE.Vector3()): THREE.Vector3 {
+export function bustPoint(
+  u: number,
+  v: number,
+  target = new THREE.Vector3(),
+  faceAmount = 1
+): THREE.Vector3 {
   const a = u * Math.PI * 2;
   const { rx, rz } = section(v);
   const sin = Math.sin(a);
@@ -142,17 +138,23 @@ export function bustPoint(u: number, v: number, target = new THREE.Vector3()): T
   // cos(a) = 1 is straight ahead (+Z).
   const front = Math.max(0, cos);
   const s = rx > 1e-4 ? (sin * rx) / rx : 0; // -1..1 across the face
-  const relief = faceRelief(v, s) * Math.pow(front, 1.5);
-
-  return target.set(sin * rx, heightAt(v), cos * rz + relief);
+  const weight = Math.pow(front, 3) * faceAmount;
+  const relief = faceRelief(v, s) * weight;
+  const lift = contourLift(v, s) * weight;
+  return target.set(sin * rx, heightAt(v) + lift, cos * rz + relief);
 }
 
 /** Approximate surface normal, by sampling neighbours. */
-export function bustNormal(u: number, v: number, target = new THREE.Vector3()): THREE.Vector3 {
+export function bustNormal(
+  u: number,
+  v: number,
+  target = new THREE.Vector3(),
+  faceAmount = 1
+): THREE.Vector3 {
   const e = 0.004;
-  const p = bustPoint(u, v);
-  const pu = bustPoint(u + e, v).sub(p);
-  const pv = bustPoint(u, Math.min(1, v + e)).sub(p);
+  const p = bustPoint(u, v, new THREE.Vector3(), faceAmount);
+  const pu = bustPoint(u + e, v, new THREE.Vector3(), faceAmount).sub(p);
+  const pv = bustPoint(u, Math.min(1, v + e), new THREE.Vector3(), faceAmount).sub(p);
   return target.copy(pu.cross(pv).normalize().negate());
 }
 
@@ -201,24 +203,32 @@ export function buildContourGeometry(rings = 62, segU = 128): THREE.BufferGeomet
   const geo = new THREE.BufferGeometry();
   const pos: number[] = [];
   const nor: number[] = [];
+  const faceOffset: number[] = [];
+  const faceNormal: number[] = [];
   const aV: number[] = [];
   const idx: number[] = [];
   const p = new THREE.Vector3();
+  const featured = new THREE.Vector3();
   const n = new THREE.Vector3();
+  const featuredNormal = new THREE.Vector3();
   let base = 0;
 
   for (let r = 0; r < rings; r++) {
     // Rings crowd slightly towards the head, where the detail is.
-    const v = Math.pow((r + 0.5) / rings, 1.06);
+    const v = (r + 0.5) / rings;
     for (let i = 0; i < segU; i++) {
       const u = i / segU;
-      bustPoint(u, v, p);
+      bustPoint(u, v, p, 0);
+      bustPoint(u, v, featured);
       // The true normal is what lets the shader shade brow, sockets and nose.
       // Without it the relief is invisible from straight ahead, since a pure
       // depth displacement doesn't move anything in screen space.
-      bustNormal(u, v, n);
+      bustNormal(u, v, n, 0);
+      bustNormal(u, v, featuredNormal);
       pos.push(p.x, p.y, p.z);
       nor.push(n.x, n.y, n.z);
+      faceOffset.push(featured.x - p.x, featured.y - p.y, featured.z - p.z);
+      faceNormal.push(featuredNormal.x, featuredNormal.y, featuredNormal.z);
       aV.push(v);
       idx.push(base + i, base + ((i + 1) % segU));
     }
@@ -227,6 +237,8 @@ export function buildContourGeometry(rings = 62, segU = 128): THREE.BufferGeomet
 
   geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
   geo.setAttribute("normal", new THREE.Float32BufferAttribute(nor, 3));
+  geo.setAttribute("aFaceOffset", new THREE.Float32BufferAttribute(faceOffset, 3));
+  geo.setAttribute("aFaceNormal", new THREE.Float32BufferAttribute(faceNormal, 3));
   geo.setAttribute("aV", new THREE.Float32BufferAttribute(aV, 1));
   geo.setIndex(idx);
   return geo;

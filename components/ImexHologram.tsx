@@ -1,155 +1,107 @@
 "use client";
 
-/**
- * Imex's face, as a hologram.
- *
- * Six stages assemble in sequence on mount — silhouette, contour grid, facial
- * geometry, amber core, throat circuitry, particles and rim — and then the
- * figure idles: contours scan upward, the core breathes, the circuitry pulses
- * at an irregular beat, motes drift and dissolve.
- *
- * The pointer turns the head, not the bust: the rotation is applied in the
- * vertex shaders with a weight that falls to zero by the base of the neck, so
- * the shoulders stay put and nothing tears at the join. It is clamped to four
- * degrees, which is enough to feel alive and not enough to look like a puppet.
- */
-
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Canvas, useFrame } from "@react-three/fiber";
-import * as THREE from "three";
-
-import HumanoidMesh from "./hologram/HumanoidMesh";
-import ContourLines from "./hologram/ContourLines";
-import FaceCore from "./hologram/FaceCore";
-import NeuralCircuit from "./hologram/NeuralCircuit";
-import ParticleField from "./hologram/ParticleField";
-import { COLORS } from "./hologram/HologramMaterial";
-import { createHoloState, type HoloState } from "./hologram/state";
+import { useCallback, useEffect, useRef, useState } from "react";
+import ParticleAssembly from "./hologram/ParticleAssembly";
+import TalkingMouth from "./hologram/TalkingMouth";
+import LiveEnergy from "./hologram/LiveEnergy";
 import type { VoiceState } from "@/lib/useApexVoice";
+import type { InputStatus } from "@/lib/voiceRecognition";
 
-const MAX_TURN = (4 * Math.PI) / 180; // the brief's four-degree limit
-const BUILD_SECONDS = 5.2;
+const ART = "/hologram/imex-stages-v3.png";
 
-function Scene({
-  state,
-  quality,
-  voiceRef,
-  onBuild,
-}: {
-  state: HoloState;
-  quality: "high" | "low";
-  voiceRef: React.RefObject<number>;
-  onBuild: (v: number) => void;
-}) {
-  const target = useRef(new THREE.Vector2());
-  const lastPct = useRef(-1);
-
-  useEffect(() => {
-    const onMove = (e: PointerEvent) => {
-      // Yaw follows x, pitch follows y (inverted — looking down means nodding).
-      target.current.set(
-        (e.clientX / window.innerWidth - 0.5) * 2 * MAX_TURN,
-        -(e.clientY / window.innerHeight - 0.5) * 2 * MAX_TURN * 0.7
-      );
-    };
-    window.addEventListener("pointermove", onMove);
-    return () => window.removeEventListener("pointermove", onMove);
-  }, []);
-
-  useFrame((_, delta) => {
-    const dt = Math.min(delta, 0.05);
-    state.t += dt;
-    state.voice += (voiceRef.current - state.voice) * Math.min(1, dt * 5);
-
-    if (!state.reduced && state.build < 1) {
-      state.build = Math.min(1, state.build + dt / BUILD_SECONDS);
-      const pct = Math.round(state.build * 100);
-      if (pct !== lastPct.current) { lastPct.current = pct; onBuild(state.build); }
-    }
-
-    // Ease toward the pointer so the head settles rather than snapping.
-    if (!state.reduced) state.turn.lerp(target.current, Math.min(1, dt * 3.2));
-  });
-
-  return (
-    <>
-      <HumanoidMesh state={state} quality={quality} />
-      <FaceCore state={state} />
-      <ContourLines state={state} quality={quality} />
-      <NeuralCircuit state={state} />
-      <ParticleField state={state} quality={quality} />
-    </>
-  );
-}
-
-export default function ImexHologram({
-  voiceState,
-  onClose,
-}: {
+type Props = {
   voiceState: VoiceState;
   onClose: () => void;
-}) {
+  onMicrophoneToggle: () => void;
+  inputStatus: InputStatus;
+  heardText?: string;
+  caption?: string;
+  error?: string | null;
+};
+
+/** Nova's live presence, sharing the active conversation and microphone. */
+export default function ImexHologram({ voiceState, onClose, onMicrophoneToggle, inputStatus, heardText = "", caption = "", error }: Props) {
+  const [ready, setReady] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const [ratio, setRatio] = useState(1.18);
+  const [step, setStep] = useState(0);
+  const [playing, setPlaying] = useState(true);
   const [reduced, setReduced] = useState(false);
-  const [quality, setQuality] = useState<"high" | "low">("high");
-  const [progress, setProgress] = useState(0);
+  const assemblyClock = useRef(0);
+  const artworkRef = useRef<HTMLImageElement | null>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    setReduced(window.matchMedia("(prefers-reduced-motion: reduce)").matches);
-    // Fewer contours and a fifth of the particles on small or dense screens.
-    const small = window.innerWidth < 820 || (window.devicePixelRatio || 1) > 2.5;
-    setQuality(small ? "low" : "high");
+    let mounted = true;
+    const image = new Image();
+    image.onload = () => {
+      if (!mounted) return;
+      setRatio(image.naturalWidth * 2 / (image.naturalHeight * 3));
+      artworkRef.current = image; setReady(true);
+    };
+    image.onerror = () => { if (mounted) setFailed(true); };
+    image.src = ART;
+    const media = window.matchMedia("(prefers-reduced-motion: reduce)");
+    setReduced(media.matches);
+    if (media.matches) { setStep(5); setPlaying(false); }
+    dialogRef.current?.focus();
+    return () => { mounted = false; };
   }, []);
 
-  const state = useMemo(() => createHoloState(reduced), [reduced]);
+  const showStage = useCallback((value: number) => setStep(value), []);
+  const complete = useCallback(() => { setStep(5); setPlaying(false); }, []);
+  useEffect(() => {
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    window.addEventListener("keydown", escape);
+    return () => window.removeEventListener("keydown", escape);
+  }, [onClose]);
 
-  // Voice level is read every frame, so it lives in a ref rather than state.
-  const voiceRef = useRef(0);
-  voiceRef.current = voiceState === "speaking" ? 1 : 0;
-
-  const label =
-    progress < 1 && !reduced
-      ? `ASSEMBLING....  ${Math.round(progress * 100)}%`
-      : voiceState === "speaking" ? "STATUS: SPEAKING"
-      : voiceState === "listening" ? "STATUS: LISTENING"
-      : voiceState === "thinking" ? "STATUS: PROCESSING"
-      : "STATUS: IDLE";
+  const listening = inputStatus === "listening";
+  const micActive = inputStatus !== "off";
+  const status = voiceState === "speaking" ? "Speaking" : voiceState === "thinking" ? "Thinking"
+    : listening ? "Listening" : inputStatus === "starting" ? "Connecting microphone"
+    : inputStatus === "wake" ? 'Say “Hey Nova”' : "Microphone off";
 
   return (
-    <div style={{ position: "fixed", inset: 0, zIndex: 90, background: COLORS.bg }}>
-      <Canvas
-        camera={{ position: [0, -0.12, 5.6], fov: 40 }}
-        dpr={quality === "high" ? [1, 2] : [1, 1.5]}
-        gl={{ antialias: true, alpha: false, powerPreference: "high-performance" }}
-        onCreated={({ gl }) => gl.setClearColor(new THREE.Color(COLORS.bg), 1)}
-        style={{ width: "100%", height: "100%", display: "block" }}
-      >
-        <Scene state={state} quality={quality} voiceRef={voiceRef} onBuild={setProgress} />
-      </Canvas>
-
-      <button
-        onClick={onClose}
-        aria-label="Close face view"
-        style={{
-          position: "absolute", top: 20, left: "clamp(16px,3vw,40px)", zIndex: 95,
-          fontFamily: "var(--font-mono)", fontSize: "0.62rem", letterSpacing: "0.2em",
-          textTransform: "uppercase", cursor: "pointer", color: "rgba(240,237,232,0.7)",
-          background: "rgba(4,8,15,0.5)", border: "1px solid rgba(240,237,232,0.2)",
-          borderRadius: 20, padding: "7px 15px", backdropFilter: "blur(6px)",
-        }}
-      >
-        EXIT
-      </button>
-
-      <div
-        aria-live="polite"
-        style={{
-          position: "absolute", top: "56%", right: "clamp(18px,7vw,120px)", zIndex: 95,
-          fontFamily: "var(--font-mono)", fontSize: 10.5, letterSpacing: "0.22em",
-          color: "rgba(0,229,240,0.75)", pointerEvents: "none", whiteSpace: "pre",
-        }}
-      >
-        {label}
+    <div ref={dialogRef} tabIndex={-1} className={`nova-face ${reduced ? "reduced" : ""}`} role="dialog" aria-modal="true" aria-label="Nova holographic presence">
+      <header className="face-header">
+        <span>NOVA <span className="dim">/ PRESENCE</span></span>
+        <button type="button" onClick={onMicrophoneToggle} disabled={voiceState === "thinking"}
+          aria-label={micActive ? "Stop microphone" : voiceState === "speaking" ? "Interrupt Nova and speak" : "Talk to Nova"}
+          aria-pressed={micActive} className={micActive ? "listening" : ""}>
+          <span aria-hidden="true">●</span> {inputStatus === "starting" ? "CANCEL MIC" : listening ? "MIC ON" : "TALK TO NOVA"}
+        </button>
+      </header>
+      <div className="portrait" style={{ width: `min(96vw, ${82 * ratio}vh)`, aspectRatio: ratio }} role="img" aria-label="Nova human hologram">
+        {ready && artworkRef.current && <ParticleAssembly image={artworkRef.current} playing={playing} replay={0} reduced={reduced} clock={assemblyClock} onStage={showStage} onComplete={complete} />}
+        {ready && artworkRef.current && <TalkingMouth image={artworkRef.current} clock={assemblyClock} reduced={reduced} />}
+        {ready && <LiveEnergy stage={step} voiceState={voiceState} reduced={reduced} clock={assemblyClock} />}
+        {!ready && <p className="loading">{failed ? "The portrait could not load. Please refresh." : "Preparing presence…"}</p>}
       </div>
+      <footer className="conversation">
+        <div className="status" role="status"><span className="light" />{status}</div>
+        {error ? <p className="voice-error" role="alert">{error}</p>
+          : <p className="caption">{voiceState === "speaking" ? caption : heardText}</p>}
+      </footer>
+      <style jsx>{`
+        .nova-face { position: fixed; inset: 0; z-index: 90; overflow: hidden; outline: none; background: #020d18; color: #88d9e2; font-family: var(--font-mono), monospace; }
+        .face-header { position: absolute; z-index: 3; top: 26px; left: clamp(20px, 4vw, 64px); right: clamp(20px, 4vw, 64px); display: flex; align-items: center; justify-content: space-between; font-size: 10px; letter-spacing: .2em; }
+        .dim { color: #376473; }
+        button { background: #020d18; color: #87c2cc; border: 1px solid #23414d; border-radius: 20px; padding: 10px 15px; font: inherit; font-size: 9px; letter-spacing: .13em; cursor: pointer; }
+        button.listening { color: #9af1f5; border-color: #43b5c6; }
+        button span { margin-right: 7px; }
+        button:disabled { opacity: .5; cursor: default; }
+        button:focus-visible { outline: 1px solid #a9eff7; outline-offset: 4px; }
+        .portrait { position: absolute; top: 47%; left: 50%; transform: translate(-50%, -50%); isolation: isolate; }
+        .portrait::after { content: ""; position: absolute; inset: -1px; pointer-events: none; z-index: 8; background: linear-gradient(to bottom, #020d18, transparent 8%, transparent 89%, #020d18), linear-gradient(to right, #020d18, transparent 7%, transparent 93%, #020d18); }
+        .loading { position: absolute; inset: 0; display: grid; place-content: center; font-size: 11px; letter-spacing: .12em; }
+        .conversation { position: absolute; z-index: 10; bottom: 25px; left: 5%; right: 5%; text-align: center; }
+        .status { display: flex; align-items: center; justify-content: center; gap: 9px; font-size: 9px; text-transform: uppercase; letter-spacing: .18em; }
+        .light { width: 4px; height: 4px; border-radius: 50%; background: #70d9e7; box-shadow: 0 0 8px #32c4e0; }
+        .caption, .voice-error { max-width: 680px; margin: 12px auto 0; font-family: system-ui, sans-serif; font-size: 13px; line-height: 1.5; }
+        .caption { color: #94bdc9; max-height: 3em; overflow: hidden; }
+        .voice-error { color: #ffb4a2; }
+      `}</style>
     </div>
   );
 }

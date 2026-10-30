@@ -1,5 +1,43 @@
 # APEX-UI
 
+## Local preview
+
+Run `npm run dev` and open http://localhost:3000 for the homepage or
+http://localhost:3000/face for the speaking portrait. `npm run dev:preview` is
+an alias for the same command. Run only one development server: both commands
+bind to `127.0.0.1:3000` and use `.next-preview`, separate from production builds
+in `.next`. A second start fails on the occupied port instead of serving another
+version of the app at a different local address.
+
+Say “Hey Nova” followed by your instruction on the homepage, or tap the orb.
+The face view listens directly and shows what it hears. Use its mic button to
+pause/resume, and press Escape or say “close your face” to return to the graph.
+Microphone status reflects the actual recognition session; permission or speech
+service failures appear on screen. Run `node scripts/test-voice-input.cjs` to
+check recognition handoff and command handling.
+
+## Free conversation mode
+
+Nova defaults to Gemini for conversation, tool calls, specialists, and camera
+input. Create a free-tier key at [Google AI Studio](https://aistudio.google.com/apikey)
+and set these values in `.env.local`, then restart the server:
+
+```dotenv
+IMEX_BACKEND=gemini
+GEMINI_API_KEY=your-key
+GEMINI_MODEL=gemini-3.1-flash-lite
+IMEX_VOICE_PROVIDER=system
+```
+
+Free-tier quotas apply; Gemini mode never falls back to paid Claude calls.
+Google's free tier may use submitted content to improve its products.
+System speech uses your OS voices without ElevenLabs. To opt into ElevenLabs,
+set `IMEX_VOICE_PROVIDER=elevenlabs` and its credentials. Chat works at `/agent`;
+the homepage orb supports voice and “show your face” opens the contour hologram.
+
+Run `node scripts/test-gemini.cjs` for mocked provider/tool-loop checks.
+
+
 An animated **autonomous-agent orb + reasoning-graph** interface — the front-end of
 Apex, released open source.
 

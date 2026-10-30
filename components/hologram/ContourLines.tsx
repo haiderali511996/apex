@@ -17,7 +17,7 @@ import type { HoloState } from "./state";
  */
 export default function ContourLines({ state, quality }: { state: HoloState; quality: "high" | "low" }) {
   const geometry = useMemo(
-    () => (quality === "high" ? buildContourGeometry(66, 132) : buildContourGeometry(46, 80)),
+    () => (quality === "high" ? buildContourGeometry(112, 192) : buildContourGeometry(76, 112)),
     [quality]
   );
   const material = useMemo(() => makeContourMaterial(), []);
@@ -27,11 +27,11 @@ export default function ContourLines({ state, quality }: { state: HoloState; qua
   useFrame(() => {
     const u = material.uniforms;
     (u.uTurn.value as THREE.Vector2).copy(state.turn);
-    // Stage 2 lays the grid in; stage 3's relief is already in the geometry,
-    // so it is revealed by the same sweep rather than a second pass.
+    // Reveal the featureless contours first, then morph them into facial relief.
     const grid = state.stage(1);
     u.uReveal.value = grid;
     u.uBuild.value = state.reduced ? 1 : grid;
+    u.uFaceReveal.value = state.reduced ? 1 : state.stage(2);
     u.uScan.value = state.reduced ? 0.5 : (state.t * 0.09) % 1;
   });
 

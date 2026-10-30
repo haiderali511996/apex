@@ -26,7 +26,7 @@ import type { PendingAction } from "./types";
 const SERVER_NAME = "imex";
 
 /**
- * Claude Code ships with file and shell tools. Imex is an assistant for
+ * Claude Code ships with file and shell tools. Nova is an assistant for
  * accounts and reports, not a coding agent, and its working directory is the
  * user's own machine — so the built-ins are blocked outright and only the
  * connectors are left. `allowedTools` alone would not do this: it auto-approves
@@ -60,7 +60,7 @@ export type ClaudeCodeRun = {
 function renderPrompt(messages: { role: "user" | "assistant"; content: string }[]): string {
   if (messages.length === 1) return messages[0].content;
   return messages
-    .map((m) => `${m.role === "user" ? "Haider" : "Imex"}: ${m.content}`)
+    .map((m) => `${m.role === "user" ? "Haider" : "Nova"}: ${m.content}`)
     .join("\n\n");
 }
 
@@ -116,7 +116,7 @@ export async function runViaClaudeCode({
       mcpServers: { [SERVER_NAME]: server },
       allowedTools: toolDefinitions.map((d) => `mcp__${SERVER_NAME}__${d.name}`),
       disallowedTools: BLOCKED_BUILTINS,
-      // Don't inherit the developer's own CLAUDE.md, skills or settings — Imex
+      // Don't inherit the developer's own CLAUDE.md, skills or settings — Nova
       // should behave the same whoever's machine it runs on.
       settingSources: [],
       maxTurns,

@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * The live camera feed, shown whenever Imex has it open. It is deliberately
+ * The live camera feed, shown whenever Nova has it open. It is deliberately
  * visible and labelled — a page holding the camera open should never be
  * ambiguous about it — and it can always be closed from here as well as by
  * voice.

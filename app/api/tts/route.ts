@@ -1,9 +1,10 @@
+import { generateGeminiSpeech } from "@/lib/agent/geminiSpeech";
 import { NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
 /**
- * Neural speech, so Imex doesn't sound like a robot.
+ * Neural speech, so Nova doesn't sound like a robot.
  *
  * The browser's speechSynthesis plays the operating system's built-in voices.
  * On macOS the compact ones are robotic by design and no setting fixes that —
@@ -18,9 +19,10 @@ export const runtime = "nodejs";
 const API = "https://api.elevenlabs.io/v1";
 
 /** Confirmed default. Override with ELEVENLABS_MODEL_ID for a faster one. */
-const DEFAULT_MODEL = "eleven_multilingual_v2";
+const DEFAULT_MODEL = "eleven_flash_v2_5";
 
 function key(): string | undefined {
+  if ((process.env.IMEX_VOICE_PROVIDER || "system") === "system") return undefined;
   return process.env.ELEVENLABS_API_KEY?.trim() || undefined;
 }
 
@@ -51,11 +53,16 @@ async function explain(res: Response): Promise<string> {
  * client learns whether neural speech is configured at all.
  */
 export async function GET() {
+  if (process.env.IMEX_VOICE_PROVIDER === "gemini") {
+    return NextResponse.json({ enabled: !!process.env.GEMINI_API_KEY, provider: "gemini", configuredVoiceId: process.env.GEMINI_TTS_VOICE || "Puck" });
+  }
   const apiKey = key();
   if (!apiKey) {
     return NextResponse.json({
       enabled: false,
-      reason: "ELEVENLABS_API_KEY is not set — falling back to the system voice.",
+      reason: (process.env.IMEX_VOICE_PROVIDER || "system") === "system"
+        ? "Free system speech is selected. Set IMEX_VOICE_PROVIDER=elevenlabs to opt into neural speech."
+        : "ELEVENLABS_API_KEY is not set — falling back to the system voice.",
     });
   }
 
@@ -88,6 +95,7 @@ export async function GET() {
 
     return NextResponse.json({
       enabled: true,
+      provider: "elevenlabs",
       configuredVoiceId: process.env.ELEVENLABS_VOICE_ID?.trim() || null,
       voices: (voices.voices ?? []).map((v) => ({
         id: v.voice_id,
@@ -107,6 +115,16 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+  if (process.env.IMEX_VOICE_PROVIDER === "gemini") {
+    const { text } = await req.json() as { text?: unknown };
+    if (typeof text !== "string" || !text.trim()) return NextResponse.json({ error: "text is required" }, { status: 400 });
+    if (text.length > 4000) return NextResponse.json({ error: "Speech text is too long." }, { status: 413 });
+    try {
+      return NextResponse.json(await generateGeminiSpeech(text));
+    } catch (error) {
+      return NextResponse.json({ error: error instanceof Error ? error.message : "Speech generation failed." }, { status: 502 });
+    }
+  }
   const apiKey = key();
   const voiceId = process.env.ELEVENLABS_VOICE_ID?.trim();
 
@@ -126,15 +144,18 @@ export async function POST(req: NextRequest) {
   }
 
   const { text } = (await req.json()) as { text?: string };
-  if (!text?.trim()) {
+  if (typeof text !== "string" || !text.trim()) {
     return NextResponse.json({ error: "text is required" }, { status: 400 });
   }
+
+  if (text.length > 4000) return NextResponse.json({ error: "Speech text is too long." }, { status: 413 });
 
   try {
     const res = await fetch(
       `${API}/text-to-speech/${encodeURIComponent(voiceId)}/with-timestamps`,
       {
         method: "POST",
+        signal: AbortSignal.any([req.signal, AbortSignal.timeout(15000)]),
         headers: { "xi-api-key": apiKey, "content-type": "application/json" },
         body: JSON.stringify({
           text,
@@ -144,8 +165,8 @@ export async function POST(req: NextRequest) {
             // this is a colleague talking, not an audiobook.
             stability: 0.4,
             similarity_boost: 0.75,
-            style: 0.15,
-            use_speaker_boost: true,
+            style: 0,
+            use_speaker_boost: false,
           },
         }),
       }
@@ -155,7 +176,7 @@ export async function POST(req: NextRequest) {
       const detail = await explain(res);
       // A bad key or an exhausted quota won't fix itself on retry, so these
       // are reported as "not configured" too and the client stops asking.
-      const status = res.status === 401 || res.status === 403 || res.status === 429 ? 503 : 502;
+      const status = /quota|credit|rate.limit/i.test(detail) ? 502 : res.status === 401 || res.status === 403 ? 503 : 502;
       return NextResponse.json(
         { error: `ElevenLabs ${res.status}: ${detail}` },
         { status }

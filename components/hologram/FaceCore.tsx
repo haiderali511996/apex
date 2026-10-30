@@ -13,10 +13,10 @@ import type { HoloState } from "./state";
  * An elliptical radial field sitting just behind the facial grid, centred
  * between the eyes and the mouth, with a bright point at its heart. Drawn
  * additively and without depth write so the cyan contours stay legible over
- * it, and it breathes gently — faster and brighter while Imex speaks.
+ * it, and it breathes gently — faster and brighter while Nova speaks.
  */
 export default function FaceCore({ state }: { state: HoloState }) {
-  const geometry = useMemo(() => new THREE.PlaneGeometry(0.95, 1.15, 1, 1), []);
+  const geometry = useMemo(() => new THREE.PlaneGeometry(0.86, 1.02, 1, 1), []);
 
   const material = useMemo(
     () =>
@@ -32,6 +32,7 @@ export default function FaceCore({ state }: { state: HoloState }) {
           uTurn: { value: new THREE.Vector2() },
           uReveal: { value: 0 },
           uBreath: { value: 0 },
+          uTime: { value: 0 },
           uAmber: { value: new THREE.Color(COLORS.amber) },
           uCore: { value: new THREE.Color(COLORS.core) },
         },
@@ -49,6 +50,7 @@ export default function FaceCore({ state }: { state: HoloState }) {
           uniform vec3 uCore;
           uniform float uReveal;
           uniform float uBreath;
+          uniform float uTime;
           varying vec2 vUv;
 
           void main() {
@@ -59,7 +61,9 @@ export default function FaceCore({ state }: { state: HoloState }) {
             float field = exp(-pow(r * (2.5 - uBreath * 0.25), 2.0));
             float point = exp(-pow(r * 26.0, 2.0));
 
-            vec3 col = uAmber * field * (0.85 + uBreath * 0.5) + uCore * point * 1.6;
+            float grain = fract(sin(dot(floor(vUv * 180.0), vec2(12.9898, 78.233)) + floor(uTime * 8.0)) * 43758.5453);
+            float threads = pow(0.5 + 0.5 * sin(vUv.y * 420.0 + sin(vUv.x * 90.0) * 2.0), 9.0);
+            vec3 col = uAmber * field * (0.38 + grain * 0.6 + threads * 0.45 + uBreath * 0.2) + uCore * point * 1.8;
             float a = clamp(field * 0.9 + point, 0.0, 1.0) * uReveal;
             gl_FragColor = vec4(col, a);
           }
@@ -74,6 +78,7 @@ export default function FaceCore({ state }: { state: HoloState }) {
     const u = material.uniforms;
     (u.uTurn.value as THREE.Vector2).copy(state.turn);
     u.uReveal.value = state.stage(3);
+    u.uTime.value = state.reduced ? 0 : state.t;
     // A slow resting breath that quickens with the voice.
     const rate = 0.9 + state.voice * 2.4;
     u.uBreath.value = state.reduced

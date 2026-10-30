@@ -1,12 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import dynamic from "next/dynamic";
+import ApexCore3D from "./ApexCore3D";
 import ApexOrb from "./ApexOrb";
 import "./apex-orb.css";
-
-// three/fiber must never SSR
-const ApexCore3D = dynamic(() => import("./ApexCore3D"), { ssr: false });
 
 // Stage matches the Apex app's on-screen proportions: the ring renders at its
 // natural 900×520 and the particle canvas gets ~900px of height, so the awake
@@ -22,6 +19,7 @@ export default function ApexHeroOrb({ state: controlled, onStateChange, interact
   const [scale, setScale] = useState(0.6);
   const [inner, setInner] = useState<OrbState>("idle");
   const state = controlled ?? inner;
+  const [clientReady, setClientReady] = useState(false);
   const [reducedMotion, setReducedMotion] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const update = (s: OrbState) => { setInner(s); onStateChange?.(s); };
@@ -31,6 +29,7 @@ export default function ApexHeroOrb({ state: controlled, onStateChange, interact
     const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
     const apply = () => setReducedMotion(mq.matches);
     apply();
+    setClientReady(true);
     mq.addEventListener("change", apply);
     return () => mq.removeEventListener("change", apply);
   }, []);
@@ -93,9 +92,9 @@ export default function ApexHeroOrb({ state: controlled, onStateChange, interact
         <div style={{ position: "absolute", left: 0, top: (STAGE_H - 520) / 2, pointerEvents: "none" }}>
           <ApexOrb state={state} variant="frame" onRingClick={undefined} />
         </div>
-        {/* cyan particle core - contained to this stage instead of full-screen.
-            Skipped entirely under prefers-reduced-motion (static ring remains). */}
-        {!reducedMotion && <ApexCore3D state={state} variant="particles" contained onClick={undefined} />}
+        {/* Include the core in the page bundle so a missing lazy chunk cannot
+            crash the homepage. Mount only after hydration: WebGL stays client-only. */}
+        {clientReady && !reducedMotion && <ApexCore3D state={state} variant="particles" contained onClick={undefined} />}
       </div>
     </div>
   );

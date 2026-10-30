@@ -124,7 +124,7 @@ export const INFO: Record<string, AgentInfo> = {
     caps: ["Background removal and replacement", "Text overlays", "Resize for social media", "Filters and enhancement"],
     asks: ["Remove background", "Resize for IG"] },
   developer: { role: "Keeper of the build log", status: "standby",
-    caps: ["Keeps Imex's development log", "Recaps what shipped - day / week / month", "Future: builds Imex itself"],
+    caps: ["Keeps Nova's development log", "Recaps what shipped - day / week / month", "Future: builds Nova itself"],
     asks: ["Recap last week"] },
   analytics: { role: "Numbers feed", status: "integration",
     caps: ["Performance metrics across every channel", "Feeds the weekly reviews"] },
@@ -139,7 +139,7 @@ export const INFO: Record<string, AgentInfo> = {
 };
 
 const STATUS_LINE: Record<AgentInfo["status"], { color: string; text: string }> = {
-  online: { color: "#34d399", text: "Online - Imex routes work to it automatically" },
+  online: { color: "#34d399", text: "Online - Nova routes work to it automatically" },
   standby: { color: "#c9a84c", text: "Standby - in active development" },
   integration: { color: "#7f9bb3", text: "Integration - wired into the core" },
 };
@@ -148,7 +148,7 @@ const STATUS_LINE: Record<AgentInfo["status"], { color: string; text: string }> 
 export function AgentOverview({ sel, onClose }: { sel: NodeSel; onClose: () => void }) {
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
   const dragRef = useRef<{ sx: number; sy: number } | null>(null);
-  const info = INFO[sel.key] ?? { role: "Specialist", status: "online" as const, caps: ["Part of the Imex core"] };
+  const info = INFO[sel.key] ?? { role: "Specialist", status: "online" as const, caps: ["Part of the Nova core"] };
   const c = sel.color;
   const status = STATUS_LINE[info.status];
 
@@ -262,32 +262,6 @@ export default function ApexWorld() {
 
   // Tapping the core runs the real voice loop: listen → ask the agent → speak
   // the answer. The orb's animation state is driven by that, not simulated.
-  /**
-   * Hands-free is on by default and starts itself on load, so "Hello Imex"
-   * works without tapping anything first. Two caveats it has to survive:
-   * the browser only grants the mic once the visitor has allowed it for this
-   * origin (the first visit still needs one click to trigger the prompt), and
-   * a visitor who switches it off should stay switched off.
-   */
-  const [wakeWord, setWakeWord] = useState(false);
-  useEffect(() => {
-    let wanted = true;
-    try {
-      wanted = window.localStorage.getItem("imex.handsfree") !== "off";
-    } catch {
-      // private mode — fall back to on
-    }
-    setWakeWord(wanted);
-  }, []);
-
-  const setHandsFree = (on: boolean) => {
-    setWakeWord(on);
-    try {
-      window.localStorage.setItem("imex.handsfree", on ? "on" : "off");
-    } catch {
-      // preference just won't persist
-    }
-  };
   const [voicePickerOpen, setVoicePickerOpen] = useState(false);
   const [faceOpen, setFaceOpen] = useState(false);
   const camera = useCamera();
@@ -319,7 +293,6 @@ export default function ApexWorld() {
   };
 
   const voice = useApexVoice({
-    wakeWord,
     onLocalCommand: async (text) => {
       const cam = cameraCommand(text);
       if (cam === "close") {
@@ -347,7 +320,7 @@ export default function ApexWorld() {
   // it's done (or muted), the whole reply stands.
   const lastReply = [...voice.messages].reverse().find((m) => m.role === "assistant")?.content ?? "";
   const transcript = voice.spokenSoFar || (voice.stillSpeaking ? "" : lastReply);
-  // What Imex heard from you — shown so you can check it caught the words right.
+  // What Nova heard from you — shown so you can check it caught the words right.
   const lastAsk = [...voice.messages].reverse().find((m) => m.role === "user")?.content ?? "";
 
   // Single entry point for opening an agent, shared by the SVG graph and the
@@ -419,7 +392,7 @@ export default function ApexWorld() {
       )}
 
       {/* Keyboard and screen-reader equivalent of the agent graph. */}
-      <nav className="visually-hidden" aria-label="Imex agents">
+      <nav className="visually-hidden" aria-label="Nova agents">
         <ul>
           {ROSTER.map((a) => (
             <li key={a.key}>
@@ -444,13 +417,13 @@ export default function ApexWorld() {
         role="button"
         tabIndex={0}
         aria-label={
-          voice.state === "listening" ? "Imex is listening - tap to stop"
-          : voice.state === "thinking" ? "Imex is thinking"
-          : voice.state === "speaking" ? "Imex is speaking - tap to stop"
-          : "Imex core - tap and speak to it"
+          voice.state === "listening" ? "Nova is listening - tap to stop"
+          : voice.state === "thinking" ? "Nova is thinking"
+          : voice.state === "speaking" ? "Nova is speaking - tap to stop"
+          : "Nova core - tap and speak to it"
         }
         onClick={voice.toggle}
-        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); voice.toggle(); } }}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); if (!e.repeat) voice.toggle(); } }}
         onMouseDown={(e) => e.preventDefault()}
         style={{
           position: "absolute", left: "50%", top: "50%", transform: "translate(-50%, -50%)",
@@ -472,18 +445,21 @@ export default function ApexWorld() {
         {/* Off by default — an always-on mic is opt-in. */}
         <button
           type="button"
-          onClick={() => setHandsFree(!wakeWord)}
-          aria-pressed={wakeWord}
+          onClick={() => {
+            if (voice.inputStatus === "off") voice.startListening();
+            else voice.stopListening();
+          }}
+          aria-pressed={voice.inputStatus !== "off"}
           style={{
             fontFamily: "var(--font-mono)", fontSize: "0.62rem", letterSpacing: "0.2em",
             textTransform: "uppercase", cursor: "pointer", whiteSpace: "nowrap",
-            color: wakeWord ? "#04080f" : "rgba(240,237,232,0.7)",
-            background: wakeWord ? "#f5a623" : "rgba(4,8,15,0.5)",
-            border: `1px solid ${wakeWord ? "#f5a623" : "rgba(240,237,232,0.2)"}`,
+            color: voice.inputStatus !== "off" ? "#04080f" : "rgba(240,237,232,0.7)",
+            background: voice.inputStatus !== "off" ? "#f5a623" : "rgba(4,8,15,0.5)",
+            border: `1px solid ${voice.inputStatus !== "off" ? "#f5a623" : "rgba(240,237,232,0.2)"}`,
             borderRadius: 20, padding: "7px 15px", backdropFilter: "blur(6px)",
           }}
         >
-          {wakeWord ? "● Hands-free on" : 'Say "Hello Imex"'}
+          {voice.inputStatus === "off" ? "Enable microphone" : voice.inputStatus === "starting" ? "Connecting microphone…" : voice.inputStatus === "listening" ? "● Listening" : 'Say “Hey Nova”'}
         </button>
 
         <button
@@ -523,11 +499,11 @@ export default function ApexWorld() {
           }}>
             {voice.state === "listening" ? "LISTENING…" : "YOU SAID"}
           </div>
-          {lastAsk && (
+          {(voice.heardText || lastAsk) && (
             <div style={{
               fontSize: 11.5, lineHeight: 1.5, color: "rgba(240,237,232,0.72)",
             }}>
-              “{lastAsk}”
+              “{voice.heardText || lastAsk}”
             </div>
           )}
         </div>
@@ -598,7 +574,8 @@ export default function ApexWorld() {
 
       {/* The face sits over everything; the voice loop keeps running behind it
           so the conversation continues while it's open. */}
-      {faceOpen && <ImexHologram voiceState={voice.state} onClose={() => setFaceOpen(false)} />}
+      {faceOpen && <ImexHologram voiceState={voice.state} onClose={() => setFaceOpen(false)} onMicrophoneToggle={voice.toggle}
+        inputStatus={voice.inputStatus} heardText={voice.heardText || lastAsk} caption={transcript} error={voice.error} />}
 
       {camera.open && (
         <CameraView stream={camera.stream.current} looking={looking} onClose={camera.stop} />

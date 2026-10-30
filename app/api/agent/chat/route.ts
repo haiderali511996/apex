@@ -3,11 +3,13 @@ import Anthropic from "@anthropic-ai/sdk";
 import { toolDefinitions, executeTool } from "@/lib/agent/tools";
 import { anthropicClient, MODEL } from "@/lib/agent/anthropicClient";
 import { runViaClaudeCode, describeClaudeCodeError } from "@/lib/agent/claudeCode";
+import { BACKEND, GeminiError } from "@/lib/agent/gemini";
+import { runViaGemini } from "@/lib/agent/geminiAgent";
 import type { PendingAction } from "@/lib/agent/types";
 
 export const runtime = "nodejs";
 
-const SYSTEM_PROMPT = `You are Imex, chief of staff to Haider — a solo founder running websites and social channels. Address him as Haider, sparingly, the way a colleague would rather than after every sentence. You coordinate a roster of specialists and connected accounts:
+const SYSTEM_PROMPT = `You are Nova, chief of staff to Haider — a solo founder running websites and social channels. Address him as Haider, sparingly, the way a colleague would rather than after every sentence. You coordinate a roster of specialists and connected accounts:
 
 - SEO & site: Google Search Console (organic search), Google Analytics (traffic).
 - Social: Facebook, Instagram, YouTube, X, TikTok.
@@ -20,7 +22,7 @@ CRITICAL — you never take a visible or irreversible action yourself. Publishin
 
 When asked for a report or "how are we doing", pull the relevant data first, then brief the user like a sharp operator: the numbers, what they actually mean, and one concrete next step — never a raw dump. For strategy, writing, or planning work, delegate to the right specialist with ask_specialist and pass in any live data you already fetched.
 
-Keep replies conversational and tight, the way you'd say them out loud — replies may be read aloud. If an account isn't configured yet, say so plainly and never invent numbers.`;
+For everyday conversation, respond naturally with warmth and curiosity. Match the user’s language, including Urdu or Roman Urdu. Avoid canned greetings, repeated names, and business reports unless asked. Usually use one to three spoken sentences; ask a useful follow-up when it fits. Never pretend to be human or to have experiences. Keep replies conversational and tight, the way you'd say them out loud — replies may be read aloud. If an account isn't configured yet, say so plainly and never invent numbers.`;
 
 const MAX_TOOL_ROUNDS = 8;
 
@@ -35,7 +37,7 @@ const MAX_TOOL_ROUNDS = 8;
  * "api" calls the Messages API with ANTHROPIC_API_KEY and is what a deployed
  * instance uses.
  */
-const BACKEND = (process.env.IMEX_BACKEND || "api").trim().toLowerCase();
+
 
 /** Turns an SDK failure into something the user can actually act on. */
 function describeError(err: unknown): { message: string; status: number } {
@@ -81,6 +83,14 @@ export async function POST(req: NextRequest) {
   };
   if (!Array.isArray(messages) || !messages.length) {
     return NextResponse.json({ error: "messages is required" }, { status: 400 });
+  }
+
+  if (BACKEND === "gemini") {
+    try {
+      return NextResponse.json(await runViaGemini(messages, SYSTEM_PROMPT));
+    } catch (error) {
+      return NextResponse.json({ error: error instanceof Error ? error.message : "Gemini request failed.", pendingActions: [] }, { status: error instanceof GeminiError ? error.status : 502 });
+    }
   }
 
   if (BACKEND === "claude-code") {

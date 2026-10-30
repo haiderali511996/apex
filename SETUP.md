@@ -1,3 +1,36 @@
+# Free conversation setup (Gemini)
+
+Nova now defaults to Gemini for chat, connected-account tools, specialist calls,
+and webcam descriptions. No request in this mode falls back to Claude.
+
+1. Create a key at https://aistudio.google.com/apikey using a free-tier project.
+2. Add `GEMINI_API_KEY=your-key` to `.env.local`.
+3. Set `IMEX_BACKEND=gemini`, `GEMINI_MODEL=gemini-3.1-flash-lite`, and
+   `IMEX_VOICE_PROVIDER=system`.
+4. Restart with `npm run dev`. Open `/agent`, or tap the homepage orb.
+   Say “show your face” to open the holographic bust.
+
+Browser speech recognition and system speech provide the voice interface without
+ElevenLabs charges. Recognition support depends on your browser; text chat works
+without it. System speech quality depends on the installed OS voice.
+
+Free-tier quotas apply. A quota error stops the request; there is no automatic
+paid fallback. Keep the Google project on the free tier if you want to avoid
+usage charges. Google says free-tier content may be used to improve its products;
+connected-account data requested by the model is included in its context.
+
+For Gemini-generated speech, set `IMEX_VOICE_PROVIDER=gemini`. It uses the same
+Gemini key with `GEMINI_TTS_MODEL=gemini-3.1-flash-tts-preview` and
+`GEMINI_TTS_VOICE=Puck`. The server wraps raw audio in WAV for browser playback.
+Speech has separate free-tier quotas; failures fall back to system speech.
+Refresh the page after changing providers, then open Voice → Test Sound.
+
+For optional ElevenLabs speech, explicitly set `IMEX_VOICE_PROVIDER=elevenlabs`.
+Existing Claude backends remain opt-in through `IMEX_BACKEND=api` or `claude-code`.
+The older Claude setup below describes those alternatives.
+
+---
+
 # Setting up Apex, the talking agent
 
 `/agent` is a chat (and voice) interface where Apex can report on your SEO
@@ -40,11 +73,11 @@ Two limits worth knowing:
   option B there.
 - **It's for you, not your users.** Anthropic does not permit offering
   claude.ai login or subscription rate limits to other people through your
-  own product without prior approval. Running Imex yourself against your own
+  own product without prior approval. Running Nova yourself against your own
   login is just you using your own Claude Code; shipping it to other users
   on your login is not.
 
-Imex gets only its own connector tools under this backend. Claude Code's
+Nova gets only its own connector tools under this backend. Claude Code's
 file and shell tools (`Read`, `Write`, `Edit`, `Bash`, `Glob`, `Grep`, …)
 are blocked outright — it's an assistant for your accounts, and it runs on
 your machine, so it has no business reading your disk.
@@ -63,7 +96,7 @@ your machine, so it has no business reading your disk.
 
 ## 1b. Voice (optional)
 
-Left alone, Imex speaks through the browser's `speechSynthesis`, which plays
+Left alone, Nova speaks through the browser's `speechSynthesis`, which plays
 whichever voices your operating system ships. On macOS the built-in compact
 voices sound robotic, and no setting changes that — the fix is to stop using
 them.
