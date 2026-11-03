@@ -7,7 +7,16 @@ import { database } from "./db";
  * post can never inject markup or scripts into the page.
  */
 
-export type Post = { id: string; slug: string; title: string; body: string; author: string; authorId: string; createdAt: string };
+export type Post = { id: string; slug: string; title: string; body: string; author: string; authorId: string; authorIsAdmin: boolean; createdAt: string };
+
+// Web addresses: with a scheme, starting www., or a bare domain on a common
+// ending. File names like Node.js or page.tsx aren't caught (js/ts aren't listed).
+const LINK = /\b(?:https?:\/\/|ftp:\/\/|www\.)\S+|\b[a-z0-9][a-z0-9-]*(?:\.[a-z0-9-]+)*\.(?:com|net|org|io|co|ai|app|dev|xyz|info|biz|me|tv|gg|ly|link|site|online|store|shop|tech|pro|live|blog|news|us|uk|pk|in|ae|sa|ca|au|de|fr|ru|cn|top|click|club|vip|win|bet|cc|ws|to|su)\b(?:\/\S*)?/gi;
+
+/** The links in a post, for refusing them from anyone but the admin. */
+export function findLinks(text: string): string[] {
+  return [...new Set(text.match(LINK) ?? [])].slice(0, 5);
+}
 
 function table() {
   const db = database();
@@ -22,9 +31,9 @@ function table() {
   return db;
 }
 
-type Row = { id: string; slug: string; title: string; body: string; author: string; user_id: string; created_at: string };
-const toPost = (r: Row): Post => ({ id: r.id, slug: r.slug, title: r.title, body: r.body, author: r.author, authorId: r.user_id, createdAt: r.created_at });
-const SELECT = "SELECT p.id, p.slug, p.title, p.body, p.user_id, p.created_at, u.display_name AS author FROM posts p JOIN users u ON u.id = p.user_id";
+type Row = { id: string; slug: string; title: string; body: string; author: string; author_role: string; user_id: string; created_at: string };
+const toPost = (r: Row): Post => ({ id: r.id, slug: r.slug, title: r.title, body: r.body, author: r.author, authorId: r.user_id, authorIsAdmin: r.author_role === "owner", createdAt: r.created_at });
+const SELECT = "SELECT p.id, p.slug, p.title, p.body, p.user_id, p.created_at, u.display_name AS author, u.role AS author_role FROM posts p JOIN users u ON u.id = p.user_id";
 
 export function listPosts(limit = 50): Post[] {
   return (table().prepare(`${SELECT} ORDER BY p.created_at DESC LIMIT ?`).all(limit) as Row[]).map(toPost);

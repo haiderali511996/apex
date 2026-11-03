@@ -45,18 +45,39 @@ const STEPS: { id: string; title: string; body: React.ReactNode }[] = [
     </ol>,
   },
   {
-    id: "social", title: "5. Facebook, Instagram, X, TikTok, Stripe, PayPal and your bank",
+    id: "social", title: "5. Facebook, Instagram, X and TikTok",
     body: <ul>
       <li><b>Facebook & Instagram:</b> in <a href="https://developers.facebook.com/tools/explorer/" target="_blank" rel="noreferrer">Graph API Explorer</a>, get a long-lived Page access token, your Page ID and (for Instagram) your business account ID.</li>
       <li><b>X:</b> in the <a href="https://developer.x.com/en/portal/dashboard" target="_blank" rel="noreferrer">developer portal</a>, copy the bearer token; add a user access token to post.</li>
       <li><b>TikTok:</b> create an app at <a href="https://developers.tiktok.com/apps" target="_blank" rel="noreferrer">TikTok for Developers</a> and copy the client key, secret and a refresh token.</li>
-      <li><b>Stripe:</b> create a <a href="https://dashboard.stripe.com/apikeys" target="_blank" rel="noreferrer">restricted, read-only key</a> for the Finance agent.</li>
-      <li><b>PayPal:</b> in the <a href="https://developer.paypal.com/dashboard/applications/live" target="_blank" rel="noreferrer">PayPal developer dashboard</a>, create a REST app, switch on <b>Transaction search</b>, and copy its Live client ID and secret.</li>
-      <li><b>Bank account (Wise):</b> in <a href="https://wise.com/settings/api-tokens" target="_blank" rel="noreferrer">Wise → Settings → API tokens</a>, create a token set to <b>Read only</b>. UK and EU accounts may ask you to approve statement access in the Wise app once.</li>
     </ul>,
   },
   {
-    id: "claude-code", title: "6. Claude Code (the Developer agent)",
+    id: "finance", title: "6. Finance agent: Stripe, PayPal and your bank",
+    body: <>
+      <p>The Finance agent reports your sales, refunds, fees, open invoices and balances. Every connection is <b>read-only</b> — it can never send or move money. Connect any of these on the <Link href="/connections">Connections</Link> page:</p>
+      <p><b>Stripe (needed for Stripe sales and invoices)</b></p>
+      <ol>
+        <li>Open <a href="https://dashboard.stripe.com/apikeys" target="_blank" rel="noreferrer">Stripe → Developers → API keys</a> and press <b>Create restricted key</b>.</li>
+        <li>Name it (e.g. &quot;{BRAND} Finance&quot;) and set these to <b>Read</b>: Charges, Invoices, Customers and Balance. Leave everything else as None.</li>
+        <li>Create the key and copy it (it starts with <code>rk_live_</code>). Paste it under <b>Stripe (Finance agent)</b> on Connections and press <b>Save</b>.</li>
+        <li>Ask: &quot;How much did I make this month?&quot; or &quot;Any unpaid invoices?&quot;</li>
+      </ol>
+      <p><b>PayPal</b></p>
+      <ol>
+        <li>In the <a href="https://developer.paypal.com/dashboard/applications/live" target="_blank" rel="noreferrer">PayPal developer dashboard</a> (Live), create a REST app.</li>
+        <li>Under the app&apos;s features, switch on <b>Transaction search</b> (it can take a few hours to start working).</li>
+        <li>Copy the <b>Client ID</b> and <b>Secret</b> into PayPal on Connections.</li>
+      </ol>
+      <p><b>Bank account (through Wise)</b></p>
+      <ol>
+        <li>In <a href="https://wise.com/settings/api-tokens" target="_blank" rel="noreferrer">Wise → Settings → API tokens</a>, create a token set to <b>Read only</b>.</li>
+        <li>Paste it under Bank account on Connections. UK and EU accounts may ask you to approve statement access once in the Wise app.</li>
+      </ol>
+    </>,
+  },
+  {
+    id: "claude-code", title: "7. Claude Code (the Developer agent)",
     body: <>
       <p>The Developer agent reads and works on code projects on your computer using <a href="https://docs.claude.com/en/docs/claude-code/overview" target="_blank" rel="noreferrer">Claude Code</a>, signed in with your own Claude Pro or Max plan.</p>
       <ol>
@@ -67,11 +88,11 @@ const STEPS: { id: string; title: string; body: React.ReactNode }[] = [
     </>,
   },
   {
-    id: "chatgpt", title: "7. ChatGPT Plus",
+    id: "chatgpt", title: "8. ChatGPT Plus",
     body: <p>A ChatGPT Plus subscription is for chatting on chatgpt.com and doesn&apos;t include API access, so other apps — including {BRAND} — can&apos;t use it. {BRAND} runs on your Gemini key. Support for OpenAI API keys (billed separately at platform.openai.com) is on the roadmap.</p>,
   },
   {
-    id: "computer", title: "8. Connecting your computer (Mac, Windows, Linux)",
+    id: "computer", title: "9. Connecting your computer (Mac, Windows, Linux)",
     body: <>
       <p>The {BRAND} desktop app links a computer to your account so your assistant can open apps and websites, switch Chrome profiles, list what&apos;s open, set the volume and play or pause music. Quitting apps, restarting and scripts always wait for your approval. Nothing else needs to be installed.</p>
       <ol>

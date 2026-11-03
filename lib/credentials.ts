@@ -74,7 +74,7 @@ export const GROUPS: Group[] = [
   {
     id: "stripe", title: "Stripe (Finance agent)",
     why: "Lets the Finance agent report your Stripe sales, refunds and open invoices. Read-only: a restricted key with read access is enough. (This is your own business's Stripe — paying for your plan is separate.)",
-    link: { href: "https://dashboard.stripe.com/apikeys", text: "Create a restricted key" },
+    link: { href: "/docs#finance", text: "How to create the Stripe key" },
     fields: [{ key: "STRIPE_SECRET_KEY", label: "Restricted key", secret: true, placeholder: "rk_live_…" }],
   },
   {

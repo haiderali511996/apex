@@ -7,7 +7,7 @@ import { setWakeName } from "./voiceRecognition";
 type Me = {
   user: { email: string; displayName: string; role: "owner" | "user" } | null;
   persona: Persona;
-  subscription: { plan: string; status: "active" | "expired"; periodEnd: string } | null;
+  subscription: { plan: string; status: "active" | "expired" | "pending"; periodEnd: string } | null;
   usage?: { voiceMinutesUsed: number; voiceMinutes: number; computers: number } | null;
 };
 

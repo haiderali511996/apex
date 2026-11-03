@@ -84,7 +84,8 @@ export const TRIAL_DAYS = 7;
 
 export function uncPerUsd(): number {
   const rate = Number(process.env.NEXT_PUBLIC_UNC_PER_USD);
-  return Number.isFinite(rate) && rate > 0 ? rate : 1;
+  // 100 UNC = $1 unless NEXT_PUBLIC_UNC_PER_USD says otherwise (Starter $19 = 1,900 UNC).
+  return Number.isFinite(rate) && rate > 0 ? rate : 100;
 }
 
 export function priceUnc(plan: Plan): number {

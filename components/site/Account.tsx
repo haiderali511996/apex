@@ -127,10 +127,12 @@ export default function Account() {
         </div>
       </section>
 
-      <section className="card" style={{ padding: 24 }}>
+      <section className="card" id="plan" style={{ padding: 24 }}>
         <h3 style={{ fontSize: 18 }}>Your plan</h3>
         <p style={{ marginBottom: 16 }}>
-          {user.role === "owner" ? "You own this server: no plan needed." : subscription?.status === "active"
+          {user.role === "owner" ? "You own this server: no plan needed." : subscription?.status === "pending"
+            ? <>Your free trial starts once your card is checked. <Link href="/billing" style={{ color: "var(--accent)" }}>Add your card</Link> — or choose a plan below.</>
+            : subscription?.status === "active"
             ? <>{subscription.plan === "trial" ? "Free trial" : PLANS.find(p => p.id === subscription.plan)?.name ?? subscription.plan} — active until {ends}.</>
             : <>Your plan ended on {ends}. Choose a plan to keep talking.</>}
         </p>

@@ -26,6 +26,7 @@ export default async function SiteShell({ children }: { children: React.ReactNod
             <Link href="/pricing">Pricing</Link>
             {user ? <>
               <Link href="/account">Account</Link>
+              <Link href="/billing" className="hide-sm">Billing</Link>
               <LogoutButton />
               <Link href="/" className="btn btn-primary btn-small">Assistant</Link>
             </> : <>

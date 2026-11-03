@@ -22,7 +22,7 @@ export default function AuthForm({ mode }: { mode: "login" | "signup" }) {
     if (!res?.ok) { setError(body.error || "Something went wrong."); setBusy(false); return; }
     const next = new URLSearchParams(window.location.search).get("next");
     // A whole-page load, so the app starts with the new session.
-    window.location.href = signup ? "/connections?welcome=1" : next && next.startsWith("/") ? next : "/";
+    window.location.href = signup ? "/billing" : next && next.startsWith("/") ? next : "/";
   };
 
   return (

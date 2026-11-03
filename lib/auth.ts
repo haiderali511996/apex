@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import { database } from "./db";
 import { DEFAULT_PERSONA, type Face, type Persona, type VoiceGender } from "./persona";
 import { PERIOD_DAYS, TRIAL_DAYS, type PlanId } from "./plans";
+import { cardPaymentsEnabled } from "./stripeBilling";
 
 /**
  * Accounts and sessions. Passwords are scrypt-hashed; a session is a random
@@ -19,7 +20,8 @@ export const SESSION_COOKIE = "sid";
 const SESSION_DAYS = 30;
 
 export type User = { id: string; email: string; displayName: string; role: "owner" | "user" };
-export type Subscription = { plan: PlanId | "trial"; status: "active" | "expired"; periodEnd: string };
+/** "pending": signed up, but the trial waits for a verified card (see lib/trialCard.ts). */
+export type Subscription = { plan: PlanId | "trial"; status: "active" | "expired" | "pending"; periodEnd: string };
 
 const sha256 = (s: string) => createHash("sha256").update(s).digest("hex");
 
@@ -48,7 +50,9 @@ export function createUser(email: string, password: string, displayName: string)
     .run(id, normalized, hashPassword(password), displayName.trim(), role, new Date().toISOString());
   db.prepare("INSERT INTO settings (user_id, assistant_name, face, voice) VALUES (?, ?, ?, ?)")
     .run(id, DEFAULT_PERSONA.name, DEFAULT_PERSONA.face, DEFAULT_PERSONA.voice);
-  db.prepare("INSERT INTO subscriptions (user_id, plan, status, period_end) VALUES (?, 'trial', 'active', ?)").run(id, daysFromNow(TRIAL_DAYS));
+  // With card payments on, a customer's trial starts once their card passes the $1 check.
+  if (role !== "owner" && cardPaymentsEnabled()) db.prepare("INSERT INTO subscriptions (user_id, plan, status, period_end) VALUES (?, 'trial', 'pending_card', ?)").run(id, new Date().toISOString());
+  else db.prepare("INSERT INTO subscriptions (user_id, plan, status, period_end) VALUES (?, 'trial', 'active', ?)").run(id, daysFromNow(TRIAL_DAYS));
   return { id, email: normalized, displayName: displayName.trim(), role };
 }
 
@@ -98,9 +102,16 @@ export function savePersona(userId: string, persona: Pick<Persona, "name" | "fac
 }
 
 export function getSubscription(user: User): Subscription {
-  const row = database().prepare("SELECT plan, period_end FROM subscriptions WHERE user_id = ?").get(user.id) as { plan: Subscription["plan"]; period_end: string } | undefined;
+  const row = database().prepare("SELECT plan, status, period_end FROM subscriptions WHERE user_id = ?").get(user.id) as { plan: Subscription["plan"]; status: string; period_end: string } | undefined;
   if (!row) return { plan: "trial", status: "expired", periodEnd: new Date(0).toISOString() };
+  if (row.status === "pending_card") return { plan: "trial", status: "pending", periodEnd: row.period_end };
   return { plan: row.plan, status: row.period_end > new Date().toISOString() ? "active" : "expired", periodEnd: row.period_end };
+}
+
+/** Starts the free trial once the card check passed; only from the waiting state, so it can't restart a trial or cut a paid plan short. */
+export function startTrial(userId: string): boolean {
+  const res = database().prepare("UPDATE subscriptions SET status = 'active', period_end = ? WHERE user_id = ? AND status = 'pending_card'").run(daysFromNow(TRIAL_DAYS), userId);
+  return Number(res.changes) > 0;
 }
 
 /** Adds a paid period, from today or from the end of the current one. */
@@ -126,6 +137,9 @@ export async function requireUser(opts: { owner?: boolean; plan?: boolean } = {}
   const user = await currentUser();
   if (!user) return { response: NextResponse.json({ error: "Please log in." }, { status: 401 }) };
   if (opts.owner && user.role !== "owner") return { response: NextResponse.json({ error: "Only the owner of this server can do that." }, { status: 403 }) };
+  if (opts.plan && user.role !== "owner" && getSubscription(user).status === "pending") {
+    return { response: NextResponse.json({ error: "Add a card on the Billing page to start your free trial — it takes a minute." }, { status: 402 }) };
+  }
   if (opts.plan && user.role !== "owner" && getSubscription(user).status !== "active") {
     return { response: NextResponse.json({ error: "Your plan has ended. Choose a plan on the Account page to keep talking." }, { status: 402 }) };
   }
@@ -142,7 +156,7 @@ export async function deleteAccount(userId: string) {
   const db = database();
   db.exec("BEGIN");
   try {
-    for (const table of ["sessions", "settings", "subscriptions", "credentials", "posts", "devices", "device_commands", "usage", "music_tracks"]) {
+    for (const table of ["sessions", "settings", "subscriptions", "credentials", "posts", "devices", "device_commands", "usage", "music_tracks", "billing_cards"]) {
       try { db.prepare(`DELETE FROM ${table} WHERE user_id = ?`).run(userId); } catch { /* table not created yet */ }
     }
     db.prepare("UPDATE payments SET user_id = 'deleted' WHERE user_id = ?").run(userId);
