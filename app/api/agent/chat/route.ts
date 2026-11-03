@@ -101,6 +101,27 @@ To act on their computer (open apps or websites, switch Chrome profiles, list wh
 ${style}`;
 }
 
+/** The user's place and local time from their browser (see lib/userLocation.ts), checked and added to the prompt. */
+function whereAndWhen(context: unknown): string {
+  const c = (context && typeof context === "object" ? context : {}) as { location?: Record<string, unknown> | null; localTime?: unknown; timeZone?: unknown };
+  const text = (v: unknown, max = 80) => (typeof v === "string" ? v.replace(/[\r\n]/g, " ").slice(0, max) : "");
+  const lines: string[] = [];
+  const loc = c.location;
+  if (loc && typeof loc.lat === "number" && typeof loc.lon === "number" && Math.abs(loc.lat) <= 90 && Math.abs(loc.lon) <= 180) {
+    const placeName = [text(loc.city), text(loc.region), text(loc.country)].filter(Boolean).join(", ") || "unknown place";
+    const how = loc.source === "device"
+      ? `from their device's location${typeof loc.accuracy === "number" ? `, accurate to about ${Math.round(loc.accuracy)} m` : ""}`
+      : "approximate, from their internet connection (city-level, may be off)";
+    lines.push(`Where the user is right now: ${placeName} (${loc.lat.toFixed(4)}, ${loc.lon.toFixed(4)}), ${how}.`);
+    if (loc.source !== "device" && text(loc.problem, 300)) lines.push(`Precise location isn't available: ${text(loc.problem, 300)} If they ask where they are, give the approximate place and tell them this fix in one sentence.`);
+  } else {
+    lines.push("The user's location is unknown (the browser didn't share it). If they ask, say so and suggest allowing Location for this site in the browser.");
+  }
+  if (text(c.localTime)) lines.push(`Their local time: ${text(c.localTime)}${text(c.timeZone, 60) ? ` (${text(c.timeZone, 60)})` : ""}.`);
+  lines.push("Use this for questions like where they are, the weather, nearby places, directions and times. Say the coordinates only if they ask for them. Where they are never changes the reply language: still answer in the language of their last message.");
+  return `\n\n${lines.join("\n")}`;
+}
+
 export async function POST(req: NextRequest) {
   const guard = await requireUser({ plan: true });
   if ("response" in guard) return guard.response;
@@ -115,8 +136,9 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const { messages } = (await req.json()) as {
+  const { messages, context } = (await req.json()) as {
     messages: { role: "user" | "assistant"; content: string }[];
+    context?: unknown;
   };
   if (!Array.isArray(messages) || !messages.length) {
     return NextResponse.json({ error: "messages is required" }, { status: 400 });
@@ -125,7 +147,7 @@ export async function POST(req: NextRequest) {
   if (BACKEND === "gemini" || !isOwner) {
     try {
       const local = isOwner && SERVER_IS_OWNERS_MAC;
-      const result = await runViaGemini(messages, local ? ownerPrompt(persona) : customerPrompt(persona), local ? {} : { exclude: LOCAL_TOOL });
+      const result = await runViaGemini(messages, (local ? ownerPrompt(persona) : customerPrompt(persona)) + whereAndWhen(context), local ? {} : { exclude: LOCAL_TOOL });
       // One line per turn in the dev server log, for tuning the prompt.
       console.log(`[turn] ${user.email} said: ${JSON.stringify(messages.at(-1)?.content ?? "")}\n[turn] ${persona.name}: ${JSON.stringify(result.reply)}`);
       return NextResponse.json(result);

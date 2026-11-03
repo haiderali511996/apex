@@ -10,6 +10,7 @@ export type ChatMessage = { role: "user" | "assistant"; content: string };
 import { getRecognitionCtor, VoiceRecognition, type InputStatus } from "./voiceRecognition";
 import { CloudRecognition } from "./cloudRecognition";
 import { musicCommand, musicOff, musicOn, pauseMusic, playMusic } from "./backgroundMusic";
+import { chatContext } from "./userLocation";
 
 /** Quiet this long after an exchange before the background music returns. */
 const MUSIC_RESUME_MS = 3000;
@@ -292,7 +293,8 @@ export function useApexVoice(options: {
         const res = await fetch("/api/agent/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ messages: next }),
+          // Where and when the user is, so "where am I" or "what's the weather" just work.
+          body: JSON.stringify({ messages: next, context: await chatContext() }),
         });
         data = await res.json();
       } catch {

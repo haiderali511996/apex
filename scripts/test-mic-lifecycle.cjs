@@ -68,6 +68,7 @@ const { useApexVoice } = load('lib/useApexVoice.ts', name => {
   if (name === './speech') return speech;
   if (name === './voiceRecognition') return recognition;
   if (name === './cloudRecognition') return { CloudRecognition: { supported: () => false } };
+  if (name === './userLocation') return { chatContext: async () => ({}) };
   if (name === './backgroundMusic') return { pauseMusic: () => music.push('pause'), playMusic: () => music.push('play'), musicCommand: () => null, musicOn() {}, musicOff() {} };
   throw Error(name);
 }, { window, fetch: async () => ({ json: async () => ({ reply: 'Hello.' }) }) });
