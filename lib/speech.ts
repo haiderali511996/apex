@@ -162,20 +162,59 @@ function speakViaSynth(
       utter.volume = 1;
 
       let started = false;
+      let anchor = 0, anchorTime = 0, wordEnd = text.length;
+      let charactersPerSecond = 13;
+      let previousBoundary: { index: number; time: number } | null = null;
+      const sample = () => {
+        if (version !== speechVersion || active !== utter) return;
+        const elapsed = (performance.now() - anchorTime) / 1000;
+        // Stay within the spoken word until the next real boundary arrives.
+        const position = Math.min(wordEnd, anchor + elapsed * charactersPerSecond);
+        updateSpeechMotion(text, position / 13, null);
+      };
       utter.onstart = () => {
+        if (version !== speechVersion || active !== utter) return;
         started = true;
         stopMotion();
-        const began = Date.now();
-        motionTimer = setInterval(() => updateSpeechMotion(text, (Date.now() - began) / 1000, null), 33);
+        anchorTime = performance.now();
+        sample();
+        motionTimer = setInterval(sample, 16);
         handlers.onStart?.();
       };
-      utter.onboundary = (e) => handlers.onBoundary?.(e.charIndex, e.charLength ?? 0);
+      utter.onboundary = (e) => {
+        if (version !== speechVersion || active !== utter) return;
+        if (e.name === "word" || !e.name) {
+          const now = performance.now();
+          if (previousBoundary && e.charIndex > previousBoundary.index) {
+            const seconds = (now - previousBoundary.time) / 1000;
+            if (seconds > .02) charactersPerSecond = Math.max(5, Math.min(30, (e.charIndex - previousBoundary.index) / seconds));
+          }
+          anchor = e.charIndex;
+          anchorTime = now;
+          const length = e.charLength || text.slice(anchor).match(/^\S+/)?.[0].length || 1;
+          wordEnd = Math.min(text.length, anchor + length);
+          previousBoundary = { index: anchor, time: now };
+          sample();
+        }
+        handlers.onBoundary?.(e.charIndex, e.charLength ?? 0);
+      };
+      utter.onpause = () => {
+        if (version === speechVersion && active === utter) stopMotion();
+      };
+      utter.onresume = () => {
+        if (version !== speechVersion || active !== utter) return;
+        anchorTime = performance.now();
+        if (motionTimer) clearInterval(motionTimer);
+        motionTimer = setInterval(sample, 16);
+      };
       utter.onend = () => {
+        if (version !== speechVersion || active !== utter) return;
         stopMotion();
         active = null;
         handlers.onEnd?.();
       };
       utter.onerror = (e) => {
+        if (version !== speechVersion || active !== utter) return;
         stopMotion();
         active = null;
         const reason = (e as SpeechSynthesisErrorEvent).error || "unknown";

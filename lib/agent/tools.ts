@@ -12,6 +12,7 @@ import { isOnline, listDevices, pickDevice, runOnDevice } from "@/lib/devices";
 import { currentUserId } from "@/lib/credentials";
 import { controlMediaApps, focusChromeTab, systemInfo, listChromeProfiles, listChromeTabs, listRunningApps, openApp, openUrl, setVolume } from "./mac";
 import type { ClientAction, PendingAction, Report } from "./types";
+import { searchWeb } from "./gemini";
 
 export const toolDefinitions: Anthropic.Tool[] = [
   {
@@ -342,6 +343,11 @@ export const toolDefinitions: Anthropic.Tool[] = [
   },
 
   /* ── Specialists ── */
+  {
+    name: "web_search",
+    description: "Search the web (Google) for anything current or factual you don't know for sure: news, prices, exchange rates, sports, people, companies, products, laws, opening hours, events. Returns an answer with sources. Prefer this over guessing.",
+    input_schema: { type: "object", properties: { query: { type: "string", description: "What to look up, as a full question." } }, required: ["query"] },
+  },
   {
     name: "ask_specialist",
     description: `Delegate to a focused specialist for thinking, writing or planning work: ${specialistKeys().join(", ")}. Use this for strategy, research, editing, sales copy, campaign planning, quotes/scoping, fabrication advice, or design direction. Fetch any live data first and pass it in as context.`,
@@ -747,6 +753,8 @@ export async function executeTool(name: string, input: Record<string, unknown>):
       return { text: `Developer (Claude Code) on past chats:\n${answer}` };
     }
 
+    case "web_search":
+      return { text: await searchWeb(String(input.query || "").slice(0, 500)) };
     case "design_picture": {
       const useCamera = input.use_camera === true;
       const instruction = String(input.instruction ?? "").trim();

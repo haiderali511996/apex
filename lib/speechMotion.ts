@@ -36,3 +36,18 @@ export function sampleSpeechMotion(text: string, time: number, alignment: Speech
 export function updateSpeechMotion(text: string, time: number, alignment: SpeechAlignment | null, duration?: number) {
   motion = sampleSpeechMotion(text, time, alignment, duration);
 }
+
+/** RMS of a short audio window. Quiet windows must close the lips completely. */
+export function speechAudioLevel(samples: Float32Array): number {
+  if (!samples.length) return 0;
+  let energy = 0;
+  for (const value of samples) energy += value * value;
+  const rms = Math.sqrt(energy / samples.length);
+  return Math.min(1, Math.max(0, (rms - .008) / .12));
+}
+
+/** Without phoneme timestamps, use audible syllables rather than guessed letters. */
+export function updateAudioSpeechMotion(level: number) {
+  const open = Math.sqrt(Math.max(0, Math.min(1, level)));
+  motion = { active: true, open, width: 1 - open * .12, round: open * .2 };
+}

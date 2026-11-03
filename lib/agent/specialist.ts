@@ -1,4 +1,7 @@
 import { BACKEND, generateGemini, geminiText } from "./gemini";
+
+// Roles whose answers depend on what's true today (prices, competitors, news): they search the web.
+const SEARCHES = new Set(["researcher", "marketing", "ops", "strategist", "sales"]);
 import type Anthropic from "@anthropic-ai/sdk";
 import { SPECIALISTS } from "./roles";
 import { anthropicClient, MODEL } from "./anthropicClient";
@@ -12,11 +15,15 @@ export async function askSpecialist(role: string, request: string, context?: str
   const specialist = SPECIALISTS[role];
   if (!specialist) throw new Error(`Unknown specialist: ${role}`);
   if (BACKEND === "gemini") {
+    const search = SEARCHES.has(role);
     const response = await generateGemini(
-      `You are Sarah's ${specialist.name} specialist. ${specialist.brief} Be concise. Advise and draft only; never claim to have acted.`,
-      [{ role: "user", parts: [{ text: context ? `${request}\n\nContext: ${context}` : request }] }]
+      `You are Sarah's ${specialist.name} specialist. ${specialist.brief} Be concise. Advise and draft only; never claim to have acted.${search ? ` You can search the web: use it for anything current (prices, competitors, news, laws, statistics) and don't guess those. Today is ${new Date().toDateString()}.` : ""}`,
+      [{ role: "user", parts: [{ text: context ? `${request}\n\nContext: ${context}` : request }] }],
+      undefined,
+      { search }
     );
-    return geminiText(response);
+    const sources = (response.sources ?? []).slice(0, 5);
+    return `${geminiText(response)}${sources.length ? `\n\nSources:\n${sources.map(s => `- ${s.title}: ${s.uri}`).join("\n")}` : ""}`;
   }
   if (!process.env.ANTHROPIC_API_KEY) throw new Error("ANTHROPIC_API_KEY is not set.");
 

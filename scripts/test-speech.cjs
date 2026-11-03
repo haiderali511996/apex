@@ -11,6 +11,7 @@ function load(file, globals) {
 (async () => {
   const speech = load('lib/agent/geminiSpeech.ts', {
     process: { env: { GEMINI_API_KEY: 'test' } },
+    require: name => { if (name === '@/lib/credentials') return { cred: () => 'test' }; throw Error(name); },
     fetch: async (_, options) => {
       const request = JSON.parse(options.body);
       assert.equal(request.generationConfig.responseModalities[0], 'AUDIO');
@@ -33,6 +34,14 @@ function load(file, globals) {
   assert.equal(motion.sampleSpeechMotion('a mo', .3, alignment).open, 0, 'pauses close the lips');
   assert(motion.sampleSpeechMotion('a mo', .5, alignment).open < .05, 'bilabial sounds close the lips');
   assert(motion.sampleSpeechMotion('a mo', .7, alignment).round > .8, 'O rounds the lips');
+  assert.equal(motion.speechAudioLevel(new Float32Array(480)), 0, 'silence closes the mouth');
+  const quiet = motion.speechAudioLevel(new Float32Array(480).fill(.02));
+  const loud = motion.speechAudioLevel(new Float32Array(480).fill(.1));
+  assert(loud > quiet && quiet > 0, 'opening follows the actual audio energy');
+  motion.updateAudioSpeechMotion(loud);
+  assert(motion.readSpeechMotion().open > .8);
+  motion.updateAudioSpeechMotion(0);
+  assert.equal(motion.readSpeechMotion().open, 0, 'audio pauses close the mouth regardless of text');
   motion.updateSpeechMotion('a', .1, alignment);
   assert(motion.readSpeechMotion().active);
   motion.resetSpeechMotion();

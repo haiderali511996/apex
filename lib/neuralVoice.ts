@@ -11,7 +11,7 @@
  * upstream of here keeps working unchanged.
  */
 
-import { updateSpeechMotion, resetSpeechMotion } from "./speechMotion";
+import { updateSpeechMotion, resetSpeechMotion, speechAudioLevel, updateAudioSpeechMotion } from "./speechMotion";
 import type { SpeakHandlers } from "./speech";
 
 type Alignment = {
@@ -205,10 +205,15 @@ export async function speakNeural(text: string, handlers: SpeakHandlers): Promis
 function playPiece(payload: TtsResponse, piece: Piece, handlers: SpeakHandlers, first: boolean, last: boolean) {
   return new Promise<"done" | "failed" | "canceled">((resolve) => {
     let settled = false;
+    let decoded: AudioBuffer | null = null;
+    let decoder: AudioContext | null = null;
     const finish = (value: "done" | "failed" | "canceled") => {
       if (settled) return;
       settled = true;
       resetSpeechMotion();
+      if (decoder) void decoder.close().catch(() => {});
+      decoder = null;
+      decoded = null;
       clearTimeout(startTimeout);
       finishCanceled = null;
       if (frame) cancelAnimationFrame(frame);
@@ -232,6 +237,22 @@ function playPiece(payload: TtsResponse, piece: Piece, handlers: SpeakHandlers, 
     finishCanceled = () => finish("canceled");
 
     const blob = base64ToBlob(payload.audioBase64, payload.mimeType || "audio/mpeg");
+    // Decode a separate copy for analysis; playback stays on the audio element
+    // so Web Audio autoplay restrictions cannot mute the voice.
+    if (!payload.alignment?.characters.length && typeof AudioContext !== "undefined") {
+      try {
+        decoder = new AudioContext();
+        const context = decoder;
+        void blob.arrayBuffer().then(bytes => context.decodeAudioData(bytes)).then(buffer => {
+          if (!settled) decoded = buffer;
+          void context.close().catch(() => {});
+          if (decoder === context) decoder = null;
+        }).catch(() => {
+          void context.close().catch(() => {});
+          if (decoder === context) decoder = null;
+        });
+      } catch { /* Timing estimates remain available when decoding is unsupported. */ }
+    }
     objectUrl = URL.createObjectURL(blob);
     const el = new Audio(objectUrl);
     audio = el;
@@ -244,7 +265,17 @@ function playPiece(payload: TtsResponse, piece: Piece, handlers: SpeakHandlers, 
     const tick = () => {
       if (audio !== el) return;
       const t = el.currentTime;
-      if (!el.paused && !el.ended && !(el.readyState < 3)) updateSpeechMotion(piece.text, t, payload.alignment, el.duration);
+      if (!el.paused && !el.ended && !(el.readyState < 3)) {
+        if (decoded) {
+          const start = Math.floor(t * decoded.sampleRate);
+          const end = Math.min(decoded.length, start + Math.ceil(decoded.sampleRate * .02));
+          let level = 0;
+          for (let channel = 0; channel < decoded.numberOfChannels; channel++) {
+            level = Math.max(level, speechAudioLevel(decoded.getChannelData(channel).subarray(start, end)));
+          }
+          updateAudioSpeechMotion(level);
+        } else updateSpeechMotion(piece.text.trim(), t, payload.alignment, el.duration);
+      }
       else resetSpeechMotion();
       while (next < cues.length && cues[next].at <= t) reveal(cues[next++]);
       frame = requestAnimationFrame(tick);

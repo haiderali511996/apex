@@ -13,7 +13,14 @@ export type GeminiContent = { role: "user" | "model"; parts: GeminiPart[] };
 export class GeminiError extends Error {
   constructor(message: string, public status: number) { super(message); }
 }
-export async function generateGemini(system: string, contents: GeminiContent[], declarations?: unknown[]) {
+/** A web page Gemini read while answering with Google Search on. */
+export type WebSource = { title: string; uri: string };
+
+/**
+ * One Gemini turn. `search: true` lets it look things up with Google Search;
+ * the pages it used come back as `sources` on the reply.
+ */
+export async function generateGemini(system: string, contents: GeminiContent[], declarations?: unknown[], opts: { search?: boolean } = {}): Promise<GeminiContent & { sources?: WebSource[] }> {
   const key = cred("GEMINI_API_KEY")?.trim();
   if (!key) throw new GeminiError(isOwnerRequest() ? "Add GEMINI_API_KEY to .env.local using a free-tier key from aistudio.google.com, then restart Sarah." : "Add your Gemini API key on the Connections page (it's free from aistudio.google.com).", 503);
   const model = process.env.GEMINI_MODEL?.trim() || "gemini-3.1-flash-lite";
@@ -24,7 +31,7 @@ export async function generateGemini(system: string, contents: GeminiContent[], 
     body: JSON.stringify({
       systemInstruction: { parts: [{ text: system }] }, contents,
       generationConfig: { maxOutputTokens: 2048 },
-      ...(declarations?.length ? { tools: [{ functionDeclarations: declarations }] } : {}),
+      ...(opts.search ? { tools: [{ google_search: {} }] } : declarations?.length ? { tools: [{ functionDeclarations: declarations }] } : {}),
     }),
   });
   // The connection to Google sometimes stalls for 10–20 s (seen with curl too),
@@ -50,11 +57,19 @@ export async function generateGemini(system: string, contents: GeminiContent[], 
       : `Gemini request failed (HTTP ${response.status}). Check the model and account configuration.`;
     throw new GeminiError(message, response.status);
   }
-  const body = await response.json() as { candidates?: { content?: GeminiContent; finishReason?: string }[]; promptFeedback?: { blockReason?: string } };
+  const body = await response.json() as { candidates?: { content?: GeminiContent; finishReason?: string; groundingMetadata?: { groundingChunks?: { web?: { title?: string; uri?: string } }[] } }[]; promptFeedback?: { blockReason?: string } };
   const candidate = body.candidates?.[0];
   if (!candidate?.content?.parts?.length) throw new GeminiError("Gemini couldn't answer that request. Try rephrasing it.", 502);
-  return candidate.content;
+  const sources = (candidate.groundingMetadata?.groundingChunks ?? []).flatMap(c => c.web?.uri ? [{ title: c.web.title || c.web.uri, uri: c.web.uri }] : []);
+  return sources.length ? { ...candidate.content, sources } : candidate.content;
 }
 export function geminiText(content: GeminiContent): string {
   return content.parts.filter(p => !p.thought).map(p => p.text || "").join("\n").trim();
+}
+
+/** Answers a question from a live Google Search, with its sources listed underneath. */
+export async function searchWeb(query: string, instructions = "Answer from current web results. Be concise and factual; give numbers, dates and names where they matter. If results disagree or are thin, say so."): Promise<string> {
+  const reply = await generateGemini(`${instructions} Today is ${new Date().toDateString()}.`, [{ role: "user", parts: [{ text: query }] }], undefined, { search: true });
+  const sources = (reply.sources ?? []).slice(0, 5);
+  return `${geminiText(reply)}${sources.length ? `\n\nSources:\n${sources.map(s => `- ${s.title}: ${s.uri}`).join("\n")}` : ""}`;
 }
