@@ -1,10 +1,11 @@
 import { google } from "googleapis";
 import type { ConnectorStatus, Report } from "../types";
+import { cred } from "@/lib/credentials";
 
 const REQUIRED_ENV = ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GOOGLE_REFRESH_TOKEN", "GSC_SITE_URL"] as const;
 
 function missingEnv(): string[] {
-  return REQUIRED_ENV.filter((key) => !process.env[key]);
+  return REQUIRED_ENV.filter((key) => !cred(key));
 }
 
 export function isConfigured(): boolean {
@@ -22,9 +23,25 @@ export function status(): ConnectorStatus {
 }
 
 function client() {
-  const auth = new google.auth.OAuth2(process.env.GOOGLE_CLIENT_ID, process.env.GOOGLE_CLIENT_SECRET);
-  auth.setCredentials({ refresh_token: process.env.GOOGLE_REFRESH_TOKEN });
+  const auth = new google.auth.OAuth2(cred("GOOGLE_CLIENT_ID"), cred("GOOGLE_CLIENT_SECRET"));
+  auth.setCredentials({ refresh_token: cred("GOOGLE_REFRESH_TOKEN") });
   return google.searchconsole({ version: "v1", auth });
+}
+
+/**
+ * Search Console only accepts a property exactly as registered —
+ * "https://unctech.co/" or "sc-domain:unctech.co". A bare "unctech.co" is read
+ * as http://unctech.co and refused with a permission error, so a bare domain
+ * is matched against the properties the account actually has.
+ */
+async function resolveSiteUrl(sc: ReturnType<typeof client>, configured: string): Promise<string> {
+  if (configured.startsWith("sc-domain:") || /^https?:\/\//.test(configured)) return configured;
+  const domain = configured.replace(/^www\./, "").replace(/\/+$/, "").toLowerCase();
+  const { data } = await sc.sites.list();
+  const owned = (data.siteEntry ?? []).filter(s => s.permissionLevel !== "siteUnverifiedUser").map(s => s.siteUrl ?? "");
+  const match = [`sc-domain:${domain}`, `https://${domain}/`, `https://www.${domain}/`, `http://${domain}/`, `http://www.${domain}/`].find(u => owned.includes(u));
+  if (!match) throw new Error(`GSC_SITE_URL "${configured}" isn't a Search Console property on this Google account. Properties: ${owned.join(", ") || "none"}.`);
+  return match;
 }
 
 function isoDaysAgo(days: number): string {
@@ -46,7 +63,7 @@ export async function getSeoReport(days = 28): Promise<Report> {
     );
   }
   const sc = client();
-  const siteUrl = process.env.GSC_SITE_URL!;
+  const siteUrl = await resolveSiteUrl(sc, cred("GSC_SITE_URL")!.trim());
   const startDate = isoDaysAgo(days);
   const endDate = isoDaysAgo(1);
 

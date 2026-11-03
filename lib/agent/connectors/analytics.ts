@@ -1,11 +1,12 @@
 import { google } from "googleapis";
 import type { ConnectorStatus, Report } from "../types";
 import { auth, isConfigured as googleConfigured } from "./google";
+import { cred } from "@/lib/credentials";
 
 function missingEnv(): string[] {
   const missing: string[] = [];
   if (!googleConfigured()) missing.push("GOOGLE_CLIENT_ID/SECRET/REFRESH_TOKEN");
-  if (!process.env.GA4_PROPERTY_ID) missing.push("GA4_PROPERTY_ID");
+  if (!cred("GA4_PROPERTY_ID")) missing.push("GA4_PROPERTY_ID");
   return missing;
 }
 
@@ -26,7 +27,7 @@ export function status(): ConnectorStatus {
 export async function getTrafficReport(days = 28): Promise<Report> {
   if (!isConfigured()) throw new Error(`Analytics is not configured. Missing: ${missingEnv().join(", ")}. See SETUP.md.`);
   const analyticsData = google.analyticsdata({ version: "v1beta", auth: auth() });
-  const property = `properties/${process.env.GA4_PROPERTY_ID}`;
+  const property = `properties/${cred("GA4_PROPERTY_ID")}`;
   const dateRanges = [{ startDate: `${days}daysAgo`, endDate: "yesterday" }];
 
   const [totals, byChannel, byPage] = await Promise.all([

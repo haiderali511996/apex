@@ -1,10 +1,11 @@
 import { google } from "googleapis";
 import type { ConnectorStatus, Report } from "../types";
+import { cred } from "@/lib/credentials";
 
 const REQUIRED_ENV = ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GOOGLE_REFRESH_TOKEN"] as const;
 
 function missingEnv(): string[] {
-  return REQUIRED_ENV.filter((key) => !process.env[key]);
+  return REQUIRED_ENV.filter((key) => !cred(key));
 }
 
 export function isConfigured(): boolean {
@@ -22,8 +23,8 @@ export function status(): ConnectorStatus[] {
 }
 
 export function auth() {
-  const client = new google.auth.OAuth2(process.env.GOOGLE_CLIENT_ID, process.env.GOOGLE_CLIENT_SECRET);
-  client.setCredentials({ refresh_token: process.env.GOOGLE_REFRESH_TOKEN });
+  const client = new google.auth.OAuth2(cred("GOOGLE_CLIENT_ID"), cred("GOOGLE_CLIENT_SECRET"));
+  client.setCredentials({ refresh_token: cred("GOOGLE_REFRESH_TOKEN") });
   return client;
 }
 

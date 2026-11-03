@@ -1,9 +1,10 @@
 import type { ConnectorStatus, Report } from "../types";
+import { cred } from "@/lib/credentials";
 
 const API = "https://api.stripe.com/v1";
 
 function missingEnv(): string[] {
-  return process.env.STRIPE_SECRET_KEY ? [] : ["STRIPE_SECRET_KEY"];
+  return cred("STRIPE_SECRET_KEY") ? [] : ["STRIPE_SECRET_KEY"];
 }
 
 export function isConfigured(): boolean {
@@ -23,7 +24,7 @@ export function status(): ConnectorStatus {
 async function stripeGet(path: string) {
   if (!isConfigured()) throw new Error("Stripe is not configured. Missing: STRIPE_SECRET_KEY. See SETUP.md.");
   const res = await fetch(`${API}/${path}`, {
-    headers: { Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}` },
+    headers: { Authorization: `Bearer ${cred("STRIPE_SECRET_KEY")}` },
   });
   const data = await res.json();
   if (!res.ok) throw new Error(`Stripe API error: ${data?.error?.message || res.statusText}`);

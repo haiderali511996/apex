@@ -1,15 +1,25 @@
+import { requireUser } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
 import { getPendingAction, listPendingActions, resolvePendingAction } from "@/lib/agent/store";
 import { runPendingAction } from "@/lib/agent/execute";
+import { enterUser } from "@/lib/credentials";
 
 export const runtime = "nodejs";
 
 export async function GET() {
+  const guard = await requireUser();
+  if ("response" in guard) return guard.response;
+  // This request runs on this account's own keys from here on.
+  enterUser(guard.user.id, guard.user.role === "owner");
   const pending = (await listPendingActions()).filter((a) => a.status === "pending");
   return NextResponse.json({ pendingActions: pending });
 }
 
 export async function POST(req: NextRequest) {
+  const guard = await requireUser();
+  if ("response" in guard) return guard.response;
+  // This request runs on this account's own keys from here on.
+  enterUser(guard.user.id, guard.user.role === "owner");
   const { id, approve } = (await req.json()) as { id: string; approve: boolean };
   if (!id || typeof approve !== "boolean") {
     return NextResponse.json({ error: "id and approve are required" }, { status: 400 });

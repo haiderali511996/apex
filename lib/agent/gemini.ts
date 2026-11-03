@@ -1,3 +1,4 @@
+import { cred, isOwnerRequest } from "@/lib/credentials";
 /** Gemini REST transport. Credentials remain on the server; no paid fallback. */
 export const BACKEND = (process.env.IMEX_BACKEND || "gemini").trim().toLowerCase();
 export type GeminiPart = {
@@ -13,10 +14,10 @@ export class GeminiError extends Error {
   constructor(message: string, public status: number) { super(message); }
 }
 export async function generateGemini(system: string, contents: GeminiContent[], declarations?: unknown[]) {
-  const key = process.env.GEMINI_API_KEY?.trim();
-  if (!key) throw new GeminiError("Add GEMINI_API_KEY to .env.local using a free-tier key from aistudio.google.com, then restart Nova.", 503);
+  const key = cred("GEMINI_API_KEY")?.trim();
+  if (!key) throw new GeminiError(isOwnerRequest() ? "Add GEMINI_API_KEY to .env.local using a free-tier key from aistudio.google.com, then restart Sarah." : "Add your Gemini API key on the Connections page (it's free from aistudio.google.com).", 503);
   const model = process.env.GEMINI_MODEL?.trim() || "gemini-3.1-flash-lite";
-  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+  const request = () => fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-goog-api-key": key },
     signal: AbortSignal.timeout(60_000),
@@ -26,6 +27,21 @@ export async function generateGemini(system: string, contents: GeminiContent[], 
       ...(declarations?.length ? { tools: [{ functionDeclarations: declarations }] } : {}),
     }),
   });
+  // The connection to Google sometimes stalls for 10–20 s (seen with curl too),
+  // and Node gives up connecting after 10 s. Three attempts ride out a stall;
+  // a slow answer (the 60 s timeout) is not retried.
+  let response: Response | undefined;
+  for (let attempt = 1; !response; attempt++) {
+    try {
+      response = await request();
+    } catch (err) {
+      if ((err as Error)?.name === "TimeoutError") throw new GeminiError("Gemini took too long to answer. Try again.", 504);
+      const cause = (err as { cause?: { code?: string } })?.cause?.code ?? (err as Error)?.message;
+      console.warn(`[gemini] attempt ${attempt} failed to connect: ${cause}`);
+      if (attempt >= 3) throw new GeminiError("Couldn't reach Gemini — the internet connection to Google is unstable right now. Say that again.", 502);
+      await new Promise(resolve => setTimeout(resolve, 500 * attempt));
+    }
+  }
   if (!response.ok) {
     // Do not forward provider bodies, which can include request details.
     const message = response.status === 429 ? "Gemini's free-tier quota is reached. Wait and try again; no paid fallback was used."

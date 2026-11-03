@@ -1,16 +1,8 @@
 import AgentChat from "@/components/AgentChat";
+import { privateMeta } from "@/lib/seo";
 
-export const metadata = { title: "Nova — Talk to your agent" };
+export const metadata = privateMeta("Assistant");
 
 export default function AgentPage() {
-  return (
-    <main style={{ background: "#04080f", minHeight: "100vh", display: "flex", flexDirection: "column" }}>
-      <div style={{ padding: "20px 20px 0", fontFamily: "var(--font-mono)", fontSize: 11, letterSpacing: "0.2em", color: "rgba(240,237,232,0.5)", textTransform: "uppercase" }}>
-        Nova — marketing &amp; SEO assistant
-      </div>
-      <div style={{ flex: 1, minHeight: 0, padding: "0 16px 16px" }}>
-        <AgentChat />
-      </div>
-    </main>
-  );
+  return <AgentChat />;
 }

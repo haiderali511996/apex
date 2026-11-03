@@ -95,6 +95,63 @@ function base64ToBlob(base64: string, mimeType: string): Blob {
   return new Blob([bytes], { type: mimeType });
 }
 
+type Piece = { text: string; offset: number };
+
+/**
+ * A reply split for speaking: the first sentence alone, so audio starts as
+ * soon as that one sentence is voiced, then the next few, then the rest,
+ * each voiced while the one before it plays.
+ * Voicing a whole reply first took 8–10 s before anything was heard. Three
+ * pieces at most, because each one is a separate request. Exported for tests.
+ */
+export function speechPieces(text: string): Piece[] {
+  const sentences = [...text.matchAll(/[^.!?\u06D4\u061F\n]+(?:[.!?\u06D4\u061F]+|\n+|$)\s*/g)]
+    .map(m => ({ text: m[0], offset: m.index ?? 0 }));
+  if (sentences.length <= 1) return [{ text, offset: 0 }];
+  const pieces: Piece[] = [];
+  let at = 0;
+  const take = (minLength: number) => {
+    const start = sentences[at];
+    let piece = "";
+    while (at < sentences.length && (piece.length < minLength || !piece)) piece += sentences[at++].text;
+    pieces.push({ text: piece, offset: start.offset });
+  };
+  // A very short opener ("Sure!") is joined to the next sentence.
+  take(25);
+  if (at < sentences.length) take(160);
+  if (at < sentences.length) take(Infinity);
+  return pieces;
+}
+
+type Fetched = TtsResponse | { failed: string } | "canceled";
+
+async function fetchPiece(text: string, controller: AbortController): Promise<Fetched> {
+  // Later pieces are voiced while earlier ones play, so they can take longer.
+  const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(30_000)]);
+  try {
+    const res = await fetch("/api/tts", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: text.trim() }),
+      signal,
+    });
+    if (controller !== abort) return "canceled";
+    const body = (await res.json().catch(() => ({}))) as Partial<TtsResponse> & { error?: string };
+    if (res.status === 503) {
+      available = "no";
+      return { failed: body.error ?? "Neural voice is not configured." };
+    }
+    // A transient failure — fall back for this utterance, but keep trying on the next one.
+    if (!res.ok) return { failed: body.error ?? `Speech service error ${res.status}.` };
+    if (!body.audioBase64) return { failed: "The speech service returned no audio." };
+    return body as TtsResponse;
+  } catch (err) {
+    if (controller !== abort || controller.signal.aborted) return "canceled";
+    if (signal.aborted) return { failed: "Speech generation timed out." };
+    return { failed: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 /**
  * Speaks `text`. Resolves true if it played, false if the caller should fall
  * back to the system voice — it never throws for an unconfigured service,
@@ -106,55 +163,49 @@ export async function speakNeural(text: string, handlers: SpeakHandlers): Promis
   cancelNeuralSpeech();
   const controller = new AbortController();
   abort = controller;
-  const requestTimeout = setTimeout(() => controller.abort("timeout"), 15000);
+  const pieces = speechPieces(text);
+  // Two pieces are voiced at a time, the next starting as one finishes, so the
+  // first is heard after its own wait only. More at once slowed every request
+  // on the free tiers, sometimes past the timeout.
+  const requests: (Promise<Fetched> | undefined)[] = [];
+  const request = (i: number): Promise<Fetched> | undefined => {
+    if (i >= pieces.length || requests[i]) return requests[i];
+    const pending = fetchPiece(pieces[i].text, controller);
+    requests[i] = pending;
+    void pending.then(() => request(i + 2));
+    return pending;
+  };
+  request(0); request(1);
+  let started = false;
 
-  let payload: TtsResponse;
-  try {
-    const res = await fetch("/api/tts", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text }),
-      signal: controller.signal,
-    });
-
-    if (controller !== abort) return true;
-    if (res.status === 503) {
-      const body = (await res.json().catch(() => ({}))) as { error?: string };
-      available = "no";
-      unavailableReason = body.error ?? "Neural voice is not configured.";
-      return false;
+  for (let i = 0; i < pieces.length; i++) {
+    const result = await request(i)!;
+    if (result === "canceled" || controller !== abort) return true;
+    if ("failed" in result) {
+      unavailableReason = result.failed;
+      if (!started) return false;
+      // Part of the reply was spoken; stop there rather than switch voices mid-reply.
+      handlers.onEnd?.();
+      return true;
     }
-    if (!res.ok) {
-      // A transient failure — fall back for this utterance, but keep trying
-      // on the next one.
-      const body = (await res.json().catch(() => ({}))) as { error?: string };
-      unavailableReason = body.error ?? `Speech service error ${res.status}.`;
-      return false;
+    available = "yes";
+    unavailableReason = "";
+    const outcome = await playPiece(result, pieces[i], handlers, i === 0, i === pieces.length - 1);
+    if (outcome === "canceled") return true;
+    if (outcome === "failed") {
+      if (!started) return false;
+      handlers.onEnd?.();
+      return true;
     }
-    payload = (await res.json()) as TtsResponse;
-  } catch (err) {
-    if (controller !== abort) return true; // deliberately canceled
-    if (controller.signal.aborted) {
-      unavailableReason = "Speech generation timed out.";
-      return false;
-    }
-    unavailableReason = err instanceof Error ? err.message : String(err);
-    return false;
-  } finally {
-    clearTimeout(requestTimeout);
+    started = true;
   }
+  return true;
+}
 
-  if (controller !== abort) return true;
-  if (!payload.audioBase64) {
-    unavailableReason = "The speech service returned no audio.";
-    return false;
-  }
-  available = "yes";
-  unavailableReason = "";
-
-  return new Promise<boolean>((resolve) => {
+function playPiece(payload: TtsResponse, piece: Piece, handlers: SpeakHandlers, first: boolean, last: boolean) {
+  return new Promise<"done" | "failed" | "canceled">((resolve) => {
     let settled = false;
-    const finish = (value: boolean) => {
+    const finish = (value: "done" | "failed" | "canceled") => {
       if (settled) return;
       settled = true;
       resetSpeechMotion();
@@ -176,34 +227,33 @@ export async function speakNeural(text: string, handlers: SpeakHandlers): Promis
       if (settled) return;
       unavailableReason = "Audio did not start. Click Test Sound to enable playback, and check that the tab is unmuted.";
       if (audio) audio.pause();
-      finish(false);
+      finish("failed");
     }, 10_000);
-    finishCanceled = () => finish(true);
+    finishCanceled = () => finish("canceled");
 
     const blob = base64ToBlob(payload.audioBase64, payload.mimeType || "audio/mpeg");
     objectUrl = URL.createObjectURL(blob);
     const el = new Audio(objectUrl);
     audio = el;
 
+    // Timings are per piece; captions index the whole reply.
     const cues = wordCues(payload.alignment);
     let next = 0;
+    const reveal = (cue: WordCue) => handlers.onBoundary?.(piece.offset + cue.charIndex, cue.charLength);
 
     const tick = () => {
       if (audio !== el) return;
       const t = el.currentTime;
-      if (!el.paused && !el.ended && !(el.readyState < 3)) updateSpeechMotion(text, t, payload.alignment, el.duration);
+      if (!el.paused && !el.ended && !(el.readyState < 3)) updateSpeechMotion(piece.text, t, payload.alignment, el.duration);
       else resetSpeechMotion();
-      while (next < cues.length && cues[next].at <= t) {
-        handlers.onBoundary?.(cues[next].charIndex, cues[next].charLength);
-        next++;
-      }
+      while (next < cues.length && cues[next].at <= t) reveal(cues[next++]);
       frame = requestAnimationFrame(tick);
     };
 
     el.onplaying = () => {
       clearTimeout(startTimeout);
       if (frame) cancelAnimationFrame(frame);
-      handlers.onStart?.(cues.length > 0);
+      if (first) handlers.onStart?.(cues.length > 0);
       frame = requestAnimationFrame(tick);
     };
     el.onended = () => {
@@ -211,18 +261,15 @@ export async function speakNeural(text: string, handlers: SpeakHandlers): Promis
       frame = 0;
       // Reveal anything the timer hasn't reached, so a caption can't be left
       // half-written if playback ends early.
-      while (next < cues.length) {
-        handlers.onBoundary?.(cues[next].charIndex, cues[next].charLength);
-        next++;
-      }
-      handlers.onEnd?.();
-      finish(true);
+      while (next < cues.length) reveal(cues[next++]);
+      if (last) handlers.onEnd?.();
+      finish("done");
     };
     el.onerror = () => {
       if (frame) cancelAnimationFrame(frame);
       frame = 0;
       unavailableReason = "The audio returned by the speech service wouldn't play.";
-      finish(false);
+      finish("failed");
     };
 
     el.play().catch((err: unknown) => {
@@ -234,7 +281,7 @@ export async function speakNeural(text: string, handlers: SpeakHandlers): Promis
         (err as Error)?.name === "NotAllowedError"
           ? "The browser blocked audio until you interact with the page — tap the orb once."
           : "Audio playback failed to start.";
-      finish(false);
+      finish("failed");
     });
   });
 }

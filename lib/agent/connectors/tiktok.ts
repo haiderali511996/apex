@@ -1,10 +1,11 @@
 import type { ConnectorStatus, Report } from "../types";
 import { getTikTokTokens, setTikTokTokens } from "../store";
+import { cred } from "@/lib/credentials";
 
 const REQUIRED_ENV = ["TIKTOK_CLIENT_KEY", "TIKTOK_CLIENT_SECRET", "TIKTOK_REFRESH_TOKEN"] as const;
 
 function missingEnv(): string[] {
-  return REQUIRED_ENV.filter((key) => !process.env[key]);
+  return REQUIRED_ENV.filter((key) => !cred(key));
 }
 
 export function isConfigured(): boolean {
@@ -31,13 +32,13 @@ async function getAccessToken(): Promise<string> {
   const now = Date.now();
   if (cached && cached.expiresAt > now + 60_000) return cached.accessToken;
 
-  const refreshToken = cached?.refreshToken ?? process.env.TIKTOK_REFRESH_TOKEN;
+  const refreshToken = cached?.refreshToken ?? cred("TIKTOK_REFRESH_TOKEN");
   const res = await fetch("https://open.tiktokapis.com/v2/oauth/token/", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
-      client_key: process.env.TIKTOK_CLIENT_KEY!,
-      client_secret: process.env.TIKTOK_CLIENT_SECRET!,
+      client_key: cred("TIKTOK_CLIENT_KEY")!,
+      client_secret: cred("TIKTOK_CLIENT_SECRET")!,
       grant_type: "refresh_token",
       refresh_token: refreshToken!,
     }),

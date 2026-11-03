@@ -1,10 +1,14 @@
+import { requireUser } from "@/lib/auth";
+import { addVoiceSeconds, spokenSeconds, voiceLimitReached } from "@/lib/usage";
+import { generateFishSpeech } from "@/lib/agent/fishSpeech";
 import { generateGeminiSpeech } from "@/lib/agent/geminiSpeech";
 import { NextRequest, NextResponse } from "next/server";
+import { enterUser, cred } from "@/lib/credentials";
 
 export const runtime = "nodejs";
 
 /**
- * Neural speech, so Nova doesn't sound like a robot.
+ * Neural speech, so Sarah doesn't sound like a robot.
  *
  * The browser's speechSynthesis plays the operating system's built-in voices.
  * On macOS the compact ones are robotic by design and no setting fixes that —
@@ -53,8 +57,11 @@ async function explain(res: Response): Promise<string> {
  * client learns whether neural speech is configured at all.
  */
 export async function GET() {
+  if (process.env.IMEX_VOICE_PROVIDER === "fish") {
+    return NextResponse.json({ enabled: !!cred("FISH_AUDIO_API_KEY"), provider: "fish", configuredVoiceId: process.env.FISH_AUDIO_VOICE_ID || null });
+  }
   if (process.env.IMEX_VOICE_PROVIDER === "gemini") {
-    return NextResponse.json({ enabled: !!process.env.GEMINI_API_KEY, provider: "gemini", configuredVoiceId: process.env.GEMINI_TTS_VOICE || "Puck" });
+    return NextResponse.json({ enabled: !!cred("GEMINI_API_KEY"), provider: "gemini", configuredVoiceId: process.env.GEMINI_TTS_VOICE || "Puck" });
   }
   const apiKey = key();
   if (!apiKey) {
@@ -115,15 +122,41 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+  const guard = await requireUser({ plan: true });
+  if ("response" in guard) return guard.response;
+  // This request runs on this account's own keys from here on.
+  enterUser(guard.user.id, guard.user.role === "owner");
+  // Out of voice minutes: the client falls back to the computer's own voice.
+  const limit = voiceLimitReached(guard.user);
+  if (limit) return NextResponse.json({ error: limit }, { status: 429 });
+  if (process.env.IMEX_VOICE_PROVIDER === "fish") {
+    const { text } = await req.json() as { text?: unknown };
+    if (typeof text !== "string" || !text.trim()) return NextResponse.json({ error: "text is required" }, { status: 400 });
+    if (text.length > 4000) return NextResponse.json({ error: "Speech text is too long." }, { status: 413 });
+    if (!cred("FISH_AUDIO_API_KEY")?.trim()) return NextResponse.json({ error: "FISH_AUDIO_API_KEY is not set." }, { status: 503 });
+    try {
+      const speech = await generateFishSpeech(text, req.signal, guard.persona.voice);
+      addVoiceSeconds(guard.user, spokenSeconds(text));
+      return NextResponse.json(speech);
+    } catch (error) {
+      return NextResponse.json({ error: error instanceof Error ? error.message : "Speech generation failed." }, { status: 502 });
+    }
+  }
   if (process.env.IMEX_VOICE_PROVIDER === "gemini") {
     const { text } = await req.json() as { text?: unknown };
     if (typeof text !== "string" || !text.trim()) return NextResponse.json({ error: "text is required" }, { status: 400 });
     if (text.length > 4000) return NextResponse.json({ error: "Speech text is too long." }, { status: 413 });
     try {
-      return NextResponse.json(await generateGeminiSpeech(text));
+      const speech = await generateGeminiSpeech(text);
+      addVoiceSeconds(guard.user, spokenSeconds(text));
+      return NextResponse.json(speech);
     } catch (error) {
       return NextResponse.json({ error: error instanceof Error ? error.message : "Speech generation failed." }, { status: 502 });
     }
+  }
+  // System speech was chosen on purpose: decline quietly, with nothing to warn about.
+  if ((process.env.IMEX_VOICE_PROVIDER || "system") === "system") {
+    return NextResponse.json({ error: "" }, { status: 503 });
   }
   const apiKey = key();
   const voiceId = process.env.ELEVENLABS_VOICE_ID?.trim();

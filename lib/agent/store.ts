@@ -2,12 +2,19 @@ import { promises as fs } from "fs";
 import path from "path";
 import { randomUUID } from "crypto";
 import type { ActionLogEntry, PendingAction } from "./types";
+import { currentUserId, isOwnerRequest } from "@/lib/credentials";
 
 // Persisted to disk (not a database) because this agent is meant to run as a
 // single always-on process holding long-lived OAuth tokens, not on ephemeral
 // serverless invocations. See SETUP.md for deployment notes.
-const DATA_DIR = path.join(process.cwd(), "data");
-const STATE_FILE = path.join(DATA_DIR, "agent-state.json");
+// The owner keeps the original file; every other account gets its own, so
+// one customer's memory, approvals and tokens are never another's.
+const ROOT = path.join(process.cwd(), "data");
+function dataDir() {
+  const id = currentUserId();
+  return !id || isOwnerRequest() ? ROOT : path.join(ROOT, "users", id.replace(/[^a-zA-Z0-9-]/g, ""));
+}
+const stateFile = () => path.join(dataDir(), "agent-state.json");
 
 type TikTokTokens = { accessToken: string; refreshToken: string; expiresAt: number };
 
@@ -18,6 +25,8 @@ type State = {
   actionLog: ActionLogEntry[];
   tiktokTokens?: TikTokTokens;
   memory: MemoryFact[];
+  /** What Haider calls a project ("Lifemed Live") → its folder, keyed by squashed name. */
+  projectNames?: Record<string, { name: string; path: string }>;
 };
 
 const EMPTY_STATE: State = { pendingActions: [], actionLog: [], memory: [] };
@@ -33,7 +42,7 @@ function serialize<T>(fn: () => Promise<T>): Promise<T> {
 
 async function readState(): Promise<State> {
   try {
-    const raw = await fs.readFile(STATE_FILE, "utf-8");
+    const raw = await fs.readFile(stateFile(), "utf-8");
     return { ...EMPTY_STATE, ...JSON.parse(raw) };
   } catch {
     return { ...EMPTY_STATE };
@@ -41,8 +50,8 @@ async function readState(): Promise<State> {
 }
 
 async function writeState(state: State): Promise<void> {
-  await fs.mkdir(DATA_DIR, { recursive: true });
-  await fs.writeFile(STATE_FILE, JSON.stringify(state, null, 2), "utf-8");
+  await fs.mkdir(dataDir(), { recursive: true });
+  await fs.writeFile(stateFile(), JSON.stringify(state, null, 2), "utf-8");
 }
 
 export function createPendingAction(
@@ -120,6 +129,18 @@ export function recallFacts(query?: string, limit = 25): Promise<MemoryFact[]> {
     return memory
       .filter((m) => m.topic.toLowerCase().includes(q) || m.fact.toLowerCase().includes(q))
       .slice(0, limit);
+  });
+}
+
+export function getProjectNames(): Promise<Record<string, { name: string; path: string }>> {
+  return serialize(async () => (await readState()).projectNames ?? {});
+}
+
+export function saveProjectName(key: string, name: string, folder: string): Promise<void> {
+  return serialize(async () => {
+    const state = await readState();
+    state.projectNames = { ...(state.projectNames ?? {}), [key]: { name, path: folder } };
+    await writeState(state);
   });
 }
 

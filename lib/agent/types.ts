@@ -9,7 +9,10 @@ export type Platform =
   | "drive"
   | "crm"
   | "finance"
-  | "analytics";
+  | "analytics"
+  | "developer"
+  | "mac"
+  | "computer";
 
 export type ConnectorStatus = {
   platform: Platform;
@@ -54,3 +57,9 @@ export type ActionLogEntry = {
   detail?: string;
   at: string;
 };
+
+/**
+ * Something only the browser can do — use the camera, show a picture — that a
+ * tool asks the deck to carry out after the reply arrives.
+ */
+export type ClientAction = { type: "design_picture"; useCamera: boolean; instruction: string };

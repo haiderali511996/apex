@@ -1,11 +1,12 @@
 import type { ConnectorStatus, Report } from "../types";
+import { cred } from "@/lib/credentials";
 
 const GRAPH = "https://graph.facebook.com/v21.0";
 
 const REQUIRED_ENV = ["META_PAGE_ID", "META_PAGE_ACCESS_TOKEN"] as const;
 
 function missingEnv(): string[] {
-  return REQUIRED_ENV.filter((key) => !process.env[key]);
+  return REQUIRED_ENV.filter((key) => !cred(key));
 }
 
 export function isConfigured(): boolean {
@@ -42,8 +43,8 @@ async function graphPost(path: string, body: Record<string, string>) {
 
 export async function getFacebookReport(): Promise<Report> {
   if (!isConfigured()) throw new Error(`Facebook is not configured. Missing: ${missingEnv().join(", ")}. See SETUP.md.`);
-  const pageId = process.env.META_PAGE_ID!;
-  const token = process.env.META_PAGE_ACCESS_TOKEN!;
+  const pageId = cred("META_PAGE_ID")!;
+  const token = cred("META_PAGE_ACCESS_TOKEN")!;
   const [page, insights] = await Promise.all([
     graphGet(`${pageId}?fields=fan_count,name&access_token=${token}`),
     graphGet(
@@ -69,10 +70,10 @@ export async function getFacebookReport(): Promise<Report> {
 }
 
 export async function getInstagramReport(): Promise<Report> {
-  if (!process.env.META_IG_USER_ID) throw new Error("Instagram is not configured. Missing: META_IG_USER_ID. See SETUP.md.");
+  if (!cred("META_IG_USER_ID")) throw new Error("Instagram is not configured. Missing: META_IG_USER_ID. See SETUP.md.");
   if (!isConfigured()) throw new Error(`Instagram is not configured. Missing: ${missingEnv().join(", ")}. See SETUP.md.`);
-  const igId = process.env.META_IG_USER_ID;
-  const token = process.env.META_PAGE_ACCESS_TOKEN!;
+  const igId = cred("META_IG_USER_ID");
+  const token = cred("META_PAGE_ACCESS_TOKEN")!;
   const [profile, insights] = await Promise.all([
     graphGet(`${igId}?fields=followers_count,username&access_token=${token}`),
     graphGet(`${igId}/insights?metric=reach,profile_views&period=day&access_token=${token}`),
@@ -97,8 +98,8 @@ export async function getInstagramReport(): Promise<Report> {
 
 /** Executes an already-approved Facebook Page post. Never call directly from a tool — always go through a pending action confirmed by the user. */
 export async function publishFacebookPost(payload: { message: string; link?: string }): Promise<string> {
-  const pageId = process.env.META_PAGE_ID!;
-  const token = process.env.META_PAGE_ACCESS_TOKEN!;
+  const pageId = cred("META_PAGE_ID")!;
+  const token = cred("META_PAGE_ACCESS_TOKEN")!;
   const body: Record<string, string> = { message: payload.message, access_token: token };
   if (payload.link) body.link = payload.link;
   const res = await graphPost(`${pageId}/feed`, body);
@@ -107,8 +108,8 @@ export async function publishFacebookPost(payload: { message: string; link?: str
 
 /** Executes an already-approved Instagram post (image + caption). Never call directly from a tool — always go through a pending action confirmed by the user. */
 export async function publishInstagramPost(payload: { imageUrl: string; caption: string }): Promise<string> {
-  const igId = process.env.META_IG_USER_ID!;
-  const token = process.env.META_PAGE_ACCESS_TOKEN!;
+  const igId = cred("META_IG_USER_ID")!;
+  const token = cred("META_PAGE_ACCESS_TOKEN")!;
   const container = await graphPost(`${igId}/media`, {
     image_url: payload.imageUrl,
     caption: payload.caption,

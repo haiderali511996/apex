@@ -11,3 +11,5 @@ next-env.d.ts
 
 .next-verify/
 .next-preview/
+.next-build/
+__pycache__/

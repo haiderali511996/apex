@@ -13,7 +13,7 @@ export async function askSpecialist(role: string, request: string, context?: str
   if (!specialist) throw new Error(`Unknown specialist: ${role}`);
   if (BACKEND === "gemini") {
     const response = await generateGemini(
-      `You are Nova's ${specialist.name} specialist. ${specialist.brief} Be concise. Advise and draft only; never claim to have acted.`,
+      `You are Sarah's ${specialist.name} specialist. ${specialist.brief} Be concise. Advise and draft only; never claim to have acted.`,
       [{ role: "user", parts: [{ text: context ? `${request}\n\nContext: ${context}` : request }] }]
     );
     return geminiText(response);
@@ -25,7 +25,7 @@ export async function askSpecialist(role: string, request: string, context?: str
     model: MODEL,
     max_tokens: 8000,
     thinking: { type: "adaptive" },
-    system: `You are the ${specialist.name} specialist inside Nova, assistant to Haider — a solo founder running websites and social channels. ${specialist.brief}\n\nBe concise and concrete. Never claim to have taken an action — you only advise and draft; the main agent handles anything that touches a real account.`,
+    system: `You are the ${specialist.name} specialist inside Sarah, assistant to Haider — a solo founder running websites and social channels. ${specialist.brief}\n\nBe concise and concrete. Never claim to have taken an action — you only advise and draft; the main agent handles anything that touches a real account.`,
     messages: [
       {
         role: "user",

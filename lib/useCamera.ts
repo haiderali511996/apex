@@ -58,10 +58,12 @@ export function useCamera() {
       const name = err instanceof Error ? err.name : "";
       setError(
         name === "NotAllowedError"
-          ? "Camera access was blocked. Allow it in your browser's site settings and ask again."
+          ? "Camera access was blocked. Allow it for this site in Chrome (the camera icon in the address bar), and for Chrome in System Settings → Privacy & Security → Camera, then try again."
           : name === "NotFoundError"
           ? "No camera found on this machine."
-          : "Couldn't open the camera."
+          : name === "NotReadableError"
+          ? "The camera is busy or macOS is blocking it. Close other apps using it (FaceTime, Zoom, Photo Booth), check System Settings → Privacy & Security → Camera for Chrome, then try again."
+          : `Couldn't open the camera${name ? ` (${name})` : ""}.`
       );
       setOpen(false);
       return false;
@@ -69,7 +71,7 @@ export function useCamera() {
   }, []);
 
   /** Grabs the current frame as a JPEG data URL, or null if nothing is live. */
-  const capture = useCallback((maxWidth = 720): string | null => {
+  const capture = useCallback((maxWidth = 720, quality = 0.82): string | null => {
     const video = videoRef.current;
     if (!video || !video.videoWidth) return null;
     const scale = Math.min(1, maxWidth / video.videoWidth);
@@ -80,7 +82,7 @@ export function useCamera() {
     if (!ctx) return null;
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     // JPEG keeps the payload small enough to post comfortably.
-    return canvas.toDataURL("image/jpeg", 0.82);
+    return canvas.toDataURL("image/jpeg", quality);
   }, []);
 
   return { open, error, start, stop, capture, videoRef, stream: streamRef };

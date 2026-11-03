@@ -181,6 +181,9 @@ function speakViaSynth(
         const reason = (e as SpeechSynthesisErrorEvent).error || "unknown";
         // "interrupted"/"canceled" are ordinary — we stopped it on purpose.
         if (reason === "interrupted" || reason === "canceled") handlers.onEnd?.();
+        // Chrome refuses speech on a page nobody has clicked yet; with the mic
+        // opening on its own, that is easy to hit.
+        else if (reason === "not-allowed") handlers.onError?.("Chrome won't speak until you click the page once. Click anywhere and Sarah will talk from then on.");
         else handlers.onError?.(reason);
       };
 
@@ -197,7 +200,8 @@ function speakViaSynth(
 
       // `onstart` is the only trustworthy signal that audio began — Chrome
       // sets speaking = true even when the named voice produces nothing, so
-      // that flag is deliberately not consulted here.
+      // that flag is deliberately not consulted here. The wait is generous:
+      // a macOS voice's first utterance takes ~2s while the voice loads.
       setTimeout(() => {
         if (started || active !== utter || version !== speechVersion) return;
 
@@ -209,8 +213,14 @@ function speakViaSynth(
           speakViaSynth(text, voice, handlers, true);
           return;
         }
+        // Still "speaking" with nothing started is Chrome's synth wedged, which
+        // only a browser restart clears — the volume is not the problem.
+        if (synth.speaking || synth.pending) {
+          handlers.onError?.("Chrome's speech engine is stuck. Quit Chrome completely (⌘Q) and reopen it.");
+          return;
+        }
         handlers.onError?.("silent");
-      }, 1400);
+      }, 4000);
     } catch (err) {
       handlers.onError?.(err instanceof Error ? err.message : String(err));
     }

@@ -1,13 +1,17 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import {
   searchConsole, meta, youtube, x, tiktok,
-  workspace, crm, finance, analytics,
+  workspace, crm, finance, paypal, bank, analytics,
   allConnectorStatuses,
 } from "./connectors";
 import { createPendingAction, listPendingActions, listActionLog, rememberFact, recallFacts } from "./store";
 import { askSpecialist } from "./specialist";
 import { SPECIALISTS, specialistKeys } from "./roles";
-import type { PendingAction, Report } from "./types";
+import { askAboutChats, askDeveloper, listProjects, nameProject, resolveProject } from "./developer";
+import { isOnline, listDevices, pickDevice, runOnDevice } from "@/lib/devices";
+import { currentUserId } from "@/lib/credentials";
+import { controlMediaApps, focusChromeTab, listChromeProfiles, listChromeTabs, listRunningApps, openApp, openUrl, setVolume } from "./mac";
+import type { ClientAction, PendingAction, Report } from "./types";
 
 export const toolDefinitions: Anthropic.Tool[] = [
   {
@@ -219,6 +223,22 @@ export const toolDefinitions: Anthropic.Tool[] = [
     },
   },
   {
+    name: "get_paypal_report",
+    description: "Read PayPal: balance, money in, money out, fees, net and recent transactions. Read-only.",
+    input_schema: {
+      type: "object",
+      properties: { days: { type: "number", description: "Trailing days. Default 30." } },
+    },
+  },
+  {
+    name: "get_bank_report",
+    description: "Read the connected bank account (Wise): balances in each currency, money in and out, and recent statement lines. Read-only.",
+    input_schema: {
+      type: "object",
+      properties: { days: { type: "number", description: "Trailing days. Default 30." } },
+    },
+  },
+  {
     name: "get_open_invoices",
     description: "List open (unpaid) Stripe invoices and the total outstanding.",
     input_schema: { type: "object", properties: {} },
@@ -254,6 +274,73 @@ export const toolDefinitions: Anthropic.Tool[] = [
     },
   },
 
+  /* ── Developer: Claude Code on this Mac ── */
+  {
+    name: "list_projects",
+    description: "List the code projects on this Mac, most recently active first: ones Haider has opened in Claude Code, plus project folders found in his home, Desktop, Documents, Downloads and code folders. Call this when he asks what projects exist, or before ask_developer when unsure of a name.",
+    input_schema: { type: "object", properties: {} },
+  },
+  {
+    name: "ask_developer",
+    description: "Hand a question about one of the user's code projects to the Developer agent — Claude Code running on this Mac. It reads and searches the project's files and answers: what a project does, where something is implemented, how a feature works, what's unfinished, or a code review. It cannot change files. It can take a minute, so tell the user you're checking first.",
+    input_schema: {
+      type: "object",
+      properties: {
+        project: { type: "string", description: "Project name (as spoken is fine), or a folder path inside his home folder." },
+        task: { type: "string", description: "The question or task, written out in full for a developer who hasn't heard the conversation." },
+      },
+      required: ["project", "task"],
+    },
+  },
+
+  {
+    name: "propose_developer_task",
+    description: "Queue a task for the Developer (Claude Code on this Mac) that runs terminal commands or changes files in a project — git pull, installing dependencies, running tests or the build, fixing a bug, making an edit. Nothing runs until Haider approves it in the UI; then Claude Code does it with the terminal and reports back. Use this instead of telling Haider to run commands himself.",
+    input_schema: {
+      type: "object",
+      properties: {
+        project: { type: "string", description: "Project name (as spoken is fine), or a folder path inside his home folder." },
+        task: { type: "string", description: "Exactly what to do, written out in full, e.g. \"Run git pull origin main and report what changed.\"" },
+      },
+      required: ["project", "task"],
+    },
+  },
+  {
+    name: "name_project",
+    description: "Save what Haider calls a project (e.g. \"Lifemed Live\", as pinned in his Claude app) and which folder it is, once he confirms it, so the name works directly next time.",
+    input_schema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "The name Haider uses." },
+        folder: { type: "string", description: "The folder: a path, or a folder name from list_projects." },
+      },
+      required: ["name", "folder"],
+    },
+  },
+  {
+    name: "search_claude_chats",
+    description: "Ask the Developer (Claude Code) about Haider's past Claude Code chats, across all projects: what was discussed, decided, built or left unfinished, and when. Use when he mentions a previous chat or session, or asks what he worked on. Read-only; can take a minute.",
+    input_schema: {
+      type: "object",
+      properties: { task: { type: "string", description: "What to find or summarize, written out in full." } },
+      required: ["task"],
+    },
+  },
+
+  /* ── Design: Gemini pictures, carried out on Haider's screen ── */
+  {
+    name: "design_picture",
+    description: "Hand a picture request to the Design agent on Haider's screen. With use_camera true, the deck takes a photo with his webcam right now and Design edits it per the instruction (leave the instruction empty to just take the photo). With use_camera false, Design makes a new picture from the instruction — a logo, poster, illustration. Use this whenever he asks for a photo, picture, selfie, image or design, in any wording or language — you do have a camera through this tool.",
+    input_schema: {
+      type: "object",
+      properties: {
+        use_camera: { type: "boolean", description: "True to take a photo with the webcam first." },
+        instruction: { type: "string", description: "What Design should make or change, in his words. Empty to just take a photo." },
+      },
+      required: ["use_camera", "instruction"],
+    },
+  },
+
   /* ── Specialists ── */
   {
     name: "ask_specialist",
@@ -268,6 +355,127 @@ export const toolDefinitions: Anthropic.Tool[] = [
       required: ["role", "request"],
     },
   },
+  /* ── Linked computers (the desktop app: Mac, Windows, Linux) ── */
+  {
+    name: "computer_list",
+    description: "List the computers linked through the desktop app, with their system and whether they're online.",
+    input_schema: { type: "object", properties: {} },
+  },
+  {
+    name: "computer_open_app",
+    description: "Open an app on a linked computer. Omit computer to use the most recently active one.",
+    input_schema: { type: "object", properties: { name: { type: "string", description: "The app, e.g. \"Google Chrome\", \"Notepad\", \"Spotify\"." }, computer: { type: "string", description: "Optional: the computer's name or system (Windows, macOS, Linux)." } }, required: ["name"] },
+  },
+  {
+    name: "computer_open_url",
+    description: "Open a website on a linked computer, optionally in a Chrome profile (its name or email) — e.g. Gmail is https://mail.google.com in that profile.",
+    input_schema: { type: "object", properties: { url: { type: "string" }, chrome_profile: { type: "string" }, computer: { type: "string" } }, required: ["url"] },
+  },
+  {
+    name: "computer_run",
+    description: "Everyday actions on a linked computer: list_apps, list_chrome_profiles, set_volume (level: 0–100, \"mute\" or \"unmute\"), media (action: play or pause).",
+    input_schema: {
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["list_apps", "list_chrome_profiles", "set_volume", "media"] },
+        level: { type: "string", description: "For set_volume." },
+        media_action: { type: "string", enum: ["play", "pause"], description: "For media." },
+        computer: { type: "string" },
+      },
+      required: ["action"],
+    },
+  },
+  {
+    name: "propose_computer_quit_app",
+    description: "Queue quitting an app on a linked computer. It may lose unsaved work, so nothing happens until the user approves it.",
+    input_schema: { type: "object", properties: { name: { type: "string" }, computer: { type: "string" } }, required: ["name"] },
+  },
+  {
+    name: "propose_computer_power",
+    description: "Queue restarting, shutting down or sleeping a linked computer. Nothing happens until the user approves it.",
+    input_schema: { type: "object", properties: { action: { type: "string", enum: ["restart", "shut down", "sleep"] }, computer: { type: "string" } }, required: ["action"] },
+  },
+  {
+    name: "propose_computer_script",
+    description: "For any other task on a linked computer: write a short script — AppleScript on macOS, PowerShell on Windows, bash on Linux (check computer_list for the system) — and queue it. Nothing runs until the user reads and approves it.",
+    input_schema: { type: "object", properties: { purpose: { type: "string" }, script: { type: "string" }, computer: { type: "string" } }, required: ["purpose", "script"] },
+  },
+  /* ── This Mac: apps, Chrome profiles, websites ── */
+  {
+    name: "mac_list_apps",
+    description: "List the apps open on Haider's MacBook right now, and which one is in front.",
+    input_schema: { type: "object", properties: {} },
+  },
+  {
+    name: "mac_open_app",
+    description: "Open (or bring to the front) an app on the Mac by name, e.g. \"Google Chrome\", \"Finder\", \"Visual Studio Code\", \"WhatsApp\".",
+    input_schema: { type: "object", properties: { name: { type: "string", description: "The app's name as macOS knows it." } }, required: ["name"] },
+  },
+  {
+    name: "mac_list_chrome_profiles",
+    description: "List Haider's Chrome profiles with their names and email addresses. Several share a name (two \"Haider\", two \"Work\"), so check this before opening a profile he names loosely.",
+    input_schema: { type: "object", properties: {} },
+  },
+  {
+    name: "mac_open_url",
+    description: "Open a website on the Mac. Give chrome_profile (its name or email) to open it in that Chrome profile — e.g. Gmail is https://mail.google.com in the profile whose inbox he wants. Without it, the site opens in the default browser.",
+    input_schema: {
+      type: "object",
+      properties: {
+        url: { type: "string", description: "The address, e.g. https://mail.google.com or youtube.com." },
+        chrome_profile: { type: "string", description: "Optional Chrome profile name or email." },
+        browser: { type: "string", description: "Optional browser app, e.g. Safari. Ignored when chrome_profile is given." },
+      },
+      required: ["url"],
+    },
+  },
+  {
+    name: "mac_list_chrome_tabs",
+    description: "List every open Chrome tab as window:tab — title — URL.",
+    input_schema: { type: "object", properties: {} },
+  },
+  {
+    name: "mac_focus_chrome_tab",
+    description: "Bring one open Chrome tab to the front, by the window and tab numbers from mac_list_chrome_tabs.",
+    input_schema: { type: "object", properties: { window: { type: "number" }, tab: { type: "number" } }, required: ["window", "tab"] },
+  },
+  {
+    name: "mac_set_volume",
+    description: "Set the Mac's output volume (0–100), or mute/unmute it.",
+    input_schema: { type: "object", properties: { level: { type: "string", description: "A number 0–100, or \"mute\" / \"unmute\"." } }, required: ["level"] },
+  },
+  {
+    name: "mac_media",
+    description: "Pause, play or check the music apps on the Mac (Apple Music, Spotify, VLC, QuickTime). Not for Sarah's own background music, which the app switches itself.",
+    input_schema: { type: "object", properties: { action: { type: "string", enum: ["pause", "play", "status"] } }, required: ["action"] },
+  },
+  {
+    name: "propose_mac_quit_all_apps",
+    description: "Queue quitting every open app on the Mac (keeping Chrome and the editor/terminal Sarah runs in). Nothing happens until Haider approves it in the UI.",
+    input_schema: { type: "object", properties: {} },
+  },
+  {
+    name: "propose_mac_power",
+    description: "Queue restarting, shutting down or sleeping the Mac. Nothing happens until Haider approves it in the UI; on restart or shut down, apps are asked to quit first so unsaved work prompts to save.",
+    input_schema: { type: "object", properties: { action: { type: "string", enum: ["restart", "shut down", "sleep"] } }, required: ["action"] },
+  },
+  {
+    name: "propose_mac_quit_app",
+    description: "Queue quitting an app on the Mac. It may lose unsaved work, so nothing happens until Haider approves it in the UI.",
+    input_schema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] },
+  },
+  {
+    name: "propose_mac_applescript",
+    description: "For any other Mac task the tools above can't do (Finder, System Settings, Notes, Reminders, window layout, clicking in an app…): write an AppleScript that does it and queue it. Nothing runs until Haider reads and approves it in the UI. Keep the script short and focused on exactly what he asked.",
+    input_schema: {
+      type: "object",
+      properties: {
+        purpose: { type: "string", description: "One plain sentence saying what the script does." },
+        script: { type: "string", description: "The AppleScript source." },
+      },
+      required: ["purpose", "script"],
+    },
+  },
 ];
 
 function reportToText(r: Report): string {
@@ -276,7 +484,13 @@ function reportToText(r: Report): string {
   return `${r.title} (${r.rangeLabel}) — ${metrics}${notes}`;
 }
 
-export type ToolRunResult = { text: string; pendingAction?: PendingAction };
+export type ToolRunResult = { text: string; pendingAction?: PendingAction; clientAction?: ClientAction };
+
+function currentUserOrThrow(): string {
+  const id = currentUserId();
+  if (!id) throw new Error("No signed-in account for this request.");
+  return id;
+}
 
 export async function executeTool(name: string, input: Record<string, unknown>): Promise<ToolRunResult> {
   switch (name) {
@@ -387,6 +601,10 @@ export async function executeTool(name: string, input: Record<string, unknown>):
 
     case "get_revenue":
       return { text: reportToText(await finance.getRevenueReport((input.days as number) || 30)) };
+    case "get_paypal_report":
+      return { text: reportToText(await paypal.getPaypalReport((input.days as number) || 30)) };
+    case "get_bank_report":
+      return { text: reportToText(await bank.getBankReport((input.days as number) || 30)) };
     case "get_open_invoices":
       return { text: reportToText(await finance.getUpcomingInvoices()) };
     case "get_traffic":
@@ -400,6 +618,118 @@ export async function executeTool(name: string, input: Record<string, unknown>):
       const facts = await recallFacts(input.query as string | undefined);
       if (!facts.length) return { text: "Nothing remembered on that yet." };
       return { text: facts.map((f) => `[${f.topic}] ${f.fact} (noted ${f.at.slice(0, 10)})`).join("\n") };
+    }
+
+    case "list_projects": {
+      const projects = await listProjects();
+      if (!projects.length) return { text: "Claude Code hasn't been used in any project on this Mac yet." };
+      return { text: projects.map((p) => `${p.name} — ${p.path} (${p.source === "claude-code" ? "opened in Claude Code" : "found on this Mac"}, last active ${p.lastActive.slice(0, 10)})`).join("\n") };
+    }
+    case "ask_developer": {
+      const project = await resolveProject(input.project as string);
+      if ("error" in project) return { text: project.error };
+      const answer = await askDeveloper(project, input.task as string);
+      const others = "alsoAt" in project && project.alsoAt?.length ? ` (used ${project.path}, the most recent; also at ${project.alsoAt.join(", ")})` : "";
+      return { text: `Developer (Claude Code) on ${project.name}${others}:\n${answer}` };
+    }
+
+    case "propose_developer_task": {
+      const project = await resolveProject(input.project as string);
+      if ("error" in project) return { text: project.error };
+      const task = input.task as string;
+      const action = await createPendingAction({
+        platform: "developer",
+        kind: "developer_task",
+        summary: `Claude Code in ${project.name} (${project.path.replace(/^\/Users\/[^/]+/, "~")}): ${task}`,
+        payload: { path: project.path, task },
+      });
+      return { text: `Task queued for Haider's approval (id ${action.id}). Nothing has run yet; Claude Code starts once he approves it.`, pendingAction: action };
+    }
+
+    case "computer_list": {
+      const devices = listDevices(currentUserOrThrow());
+      return { text: devices.length ? devices.map(d => `${d.name} (${d.os}) — ${isOnline(d) ? "online" : "offline"}`).join("\n") : "No computer is linked yet. Link one on the Account page with the desktop app." };
+    }
+    case "computer_open_app": {
+      const userId = currentUserOrThrow(), device = pickDevice(userId, input.computer as string | undefined);
+      return { text: `${device.name}: ${await runOnDevice(userId, device.id, "open_app", { name: input.name })}` };
+    }
+    case "computer_open_url": {
+      const userId = currentUserOrThrow(), device = pickDevice(userId, input.computer as string | undefined);
+      return { text: `${device.name}: ${await runOnDevice(userId, device.id, "open_url", { url: input.url, chrome_profile: input.chrome_profile })}` };
+    }
+    case "computer_run": {
+      const userId = currentUserOrThrow(), device = pickDevice(userId, input.computer as string | undefined);
+      const action = input.action as string;
+      if (!["list_apps", "list_chrome_profiles", "set_volume", "media"].includes(action)) return { text: "Unknown action." };
+      const args = action === "set_volume" ? { level: input.level } : action === "media" ? { action: input.media_action } : {};
+      return { text: `${device.name}: ${await runOnDevice(userId, device.id, action, args)}` };
+    }
+    case "propose_computer_quit_app":
+    case "propose_computer_power":
+    case "propose_computer_script": {
+      const userId = currentUserOrThrow(), device = pickDevice(userId, input.computer as string | undefined);
+      const [action, args, summary] = name === "propose_computer_quit_app" ? ["quit_app", { name: input.name }, `Quit ${input.name} on ${device.name}`]
+        : name === "propose_computer_power" ? ["power", { action: input.action }, `${String(input.action)[0].toUpperCase()}${String(input.action).slice(1)} ${device.name}`]
+        : ["run_script", { script: input.script }, `On ${device.name} (${device.os}): ${input.purpose}\n\n${input.script}`];
+      const pending = await createPendingAction({ platform: "computer", kind: "device_command", summary: summary as string, payload: { userId, deviceId: device.id, action, args } });
+      return { text: `Queued for approval (id ${pending.id}). Nothing has happened on ${device.name} yet.`, pendingAction: pending };
+    }
+
+    case "mac_list_apps": {
+      const apps = await listRunningApps();
+      return { text: `In front: ${apps.frontmost}\nOpen: ${apps.running.join(", ")}` };
+    }
+    case "mac_open_app":
+      return { text: await openApp(input.name as string) };
+    case "mac_list_chrome_profiles":
+      return { text: (await listChromeProfiles()).map(p => `${p.name}${p.email ? ` — ${p.email}` : ""}`).join("\n") };
+    case "mac_open_url":
+      return { text: await openUrl(input.url as string, { chromeProfile: input.chrome_profile as string | undefined, browser: input.browser as string | undefined }) };
+    case "mac_list_chrome_tabs":
+      return { text: await listChromeTabs() };
+    case "mac_focus_chrome_tab":
+      return { text: await focusChromeTab(Number(input.window), Number(input.tab)) };
+    case "mac_set_volume": {
+      const level = String(input.level).trim().toLowerCase();
+      return { text: await setVolume(level === "mute" || level === "unmute" ? level : Number(level)) };
+    }
+    case "mac_media":
+      return { text: await controlMediaApps(input.action as "pause" | "play" | "status") };
+    case "propose_mac_quit_all_apps": {
+      const action = await createPendingAction({ platform: "mac", kind: "mac_quit_all_apps", summary: "Quit all open apps on the Mac (Chrome and the editor/terminal Sarah runs in stay open)", payload: {} });
+      return { text: `Queued for Haider's approval (id ${action.id}); nothing has been closed yet.`, pendingAction: action };
+    }
+    case "propose_mac_power": {
+      const what = input.action as "restart" | "shut down" | "sleep";
+      if (!["restart", "shut down", "sleep"].includes(what)) return { text: "action must be restart, shut down or sleep." };
+      const action = await createPendingAction({ platform: "mac", kind: "mac_power", summary: `${what[0].toUpperCase()}${what.slice(1)} the Mac`, payload: { action: what } });
+      return { text: `Queued for Haider's approval (id ${action.id}). The Mac won't ${what} until he approves.`, pendingAction: action };
+    }
+    case "propose_mac_quit_app": {
+      const action = await createPendingAction({ platform: "mac", kind: "mac_quit_app", summary: `Quit ${input.name} on the Mac`, payload: { name: input.name } });
+      return { text: `Queued for Haider's approval (id ${action.id}); ${input.name} stays open until he approves.`, pendingAction: action };
+    }
+    case "propose_mac_applescript": {
+      const action = await createPendingAction({ platform: "mac", kind: "mac_applescript", summary: `On the Mac: ${input.purpose}\n\n${input.script}`, payload: { script: input.script } });
+      return { text: `Queued for Haider's approval (id ${action.id}). Nothing has run yet.`, pendingAction: action };
+    }
+
+    case "name_project":
+      return { text: await nameProject(input.name as string, input.folder as string) };
+
+    case "search_claude_chats": {
+      const answer = await askAboutChats(input.task as string);
+      return { text: `Developer (Claude Code) on past chats:\n${answer}` };
+    }
+
+    case "design_picture": {
+      const useCamera = input.use_camera === true;
+      const instruction = String(input.instruction ?? "").trim();
+      return {
+        text: `${useCamera ? "The deck is taking the photo now and Design will work on it" : "Design is making the picture now"}; the result appears on Haider's screen. Reply with one short line in his language, e.g. "On it — taking your photo now."`,
+        clientAction: { type: "design_picture", useCamera, instruction },
+      };
     }
 
     case "ask_specialist": {

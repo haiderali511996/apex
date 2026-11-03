@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { smooth } from "./assembly";
+import { centreLine, headPose, noddedY } from "./headPose";
 import type { VoiceState } from "@/lib/useApexVoice";
 
 type Props = { stage: number; voiceState: VoiceState; reduced: boolean; clock: { current: number } };
@@ -31,7 +32,6 @@ export default function LiveEnergy(props: Props) {
 
     let seed = 927;
     const rand = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 4294967296; };
-    const neurons = Array.from({ length: 85 }, () => ({ angle: rand() * Math.PI * 2, radius: Math.sqrt(rand()), phase: rand() * Math.PI * 2 }));
     const motes = Array.from({ length: 1100 }, () => ({ y: rand() * .91 + .035, side: rand() > .5 ? 1 : -1, offset: rand() * .055, phase: rand(), speed: .055 + rand() * .065 }));
 
     const draw = (now: number) => {
@@ -50,40 +50,54 @@ export default function LiveEnergy(props: Props) {
       ctx.clearRect(0, 0, width, height);
 
       if (core > .001) {
-        // Brain center: upper cranium, well above the eye line (~36% down).
-        const x = width * .5, y = height * .195;
-        const radius = width * .145 * pulse;
+        // A broad amber field lives on the forehead, with no point-light core.
+        const turn = centreLine(headPose.yaw, .5);
+        const x = width * turn.x;
+        const y = height * noddedY(.225, headPose.pitch, .5);
+        const radiusX = width * .147 * turn.squash;
+        const top = noddedY(.105, headPose.pitch, .5);
+        const bottom = noddedY(.325, headPose.pitch, .5);
+        const radiusY = height * (bottom - top) * .5;
         ctx.save();
         ctx.globalCompositeOperation = "screen";
         ctx.globalAlpha = core;
-        // Keep the red-orange field within the forehead, above the brow.
-        ctx.beginPath(); ctx.ellipse(x, y, width * .145, height * .125, 0, 0, Math.PI * 2); ctx.clip();
-        const glow = ctx.createRadialGradient(x, y, 0, x, y, radius);
-        glow.addColorStop(0, `rgba(255,138,22,${.65 * strength})`);
-        glow.addColorStop(.3, `rgba(255,79,8,${.48 * strength})`);
-        glow.addColorStop(.65, "rgba(239,54,3,.22)");
-        glow.addColorStop(1, "rgba(222,100,0,0)");
-        ctx.fillStyle = glow; ctx.beginPath(); ctx.arc(x, y, radius, 0, Math.PI * 2); ctx.fill();
-        const positions = neurons.map(n => {
-          const angle = n.angle + t * .07;
-          const r = radius * n.radius * (.83 + Math.sin(t * .7 + n.phase) * .04);
-          return { x: x + Math.cos(angle) * r, y: y + Math.sin(angle) * r * .8, phase: n.phase };
-        });
-        positions.forEach((p, i) => {
-          ctx.fillStyle = `rgba(255,181,36,${.28 + .22 * Math.sin(t * 2 + p.phase)})`;
-          ctx.beginPath(); ctx.arc(p.x, p.y, .55, 0, Math.PI * 2); ctx.fill();
-          const q = positions[(i + 11) % positions.length];
-          if (Math.hypot(p.x - q.x, p.y - q.y) < radius * .42) {
-            ctx.strokeStyle = "rgba(255,154,12,.17)"; ctx.lineWidth = .5;
-            ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y); ctx.stroke();
-          }
-        });
-        const heart = ctx.createRadialGradient(x, y, 0, x, y, width * .019);
-        heart.addColorStop(0, "rgba(255,255,223,1)");
-        heart.addColorStop(.22, "rgba(255,228,134,.96)");
-        heart.addColorStop(.5, "rgba(255,176,20,.65)");
-        heart.addColorStop(1, "rgba(255,132,0,0)");
-        ctx.fillStyle = heart; ctx.beginPath(); ctx.arc(x, y, width * .019, 0, Math.PI * 2); ctx.fill();
+
+        // Draw in elliptical coordinates so the light fits between hairline
+        // and brows. The feathered edge keeps the cyan face lines visible.
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.scale(radiusX, radiusY);
+        const glow = ctx.createRadialGradient(0, 0, 0, 0, 0, 1);
+        glow.addColorStop(0, `rgba(255,174,24,${.56 * strength * pulse})`);
+        glow.addColorStop(.36, `rgba(255,157,12,${.52 * strength * pulse})`);
+        glow.addColorStop(.64, `rgba(248,137,8,${.34 * strength})`);
+        glow.addColorStop(.84, "rgba(232,139,17,.12)");
+        glow.addColorStop(1, "rgba(232,139,17,0)");
+        ctx.fillStyle = glow;
+        ctx.fillRect(-1, -1, 2, 2);
+        ctx.restore();
+
+        // Warm, gently curved scan lines spread the energy across the skin
+        // instead of concentrating it into a bright dot or neural sparks.
+        const lineGlow = ctx.createLinearGradient(x - radiusX, 0, x + radiusX, 0);
+        lineGlow.addColorStop(0, "rgba(255,181,41,0)");
+        lineGlow.addColorStop(.25, "rgba(255,185,48,.25)");
+        lineGlow.addColorStop(.5, "rgba(255,199,72,.42)");
+        lineGlow.addColorStop(.75, "rgba(255,185,48,.25)");
+        lineGlow.addColorStop(1, "rgba(255,181,41,0)");
+        ctx.strokeStyle = lineGlow;
+        ctx.lineWidth = Math.max(.7, height * .0014);
+        for (let row = 0; row < 12; row++) {
+          const v = (row + .5) / 12;
+          ctx.globalAlpha = core * Math.sin(v * Math.PI) * strength * pulse;
+          const lineY = y + (v * 2 - 1) * radiusY * .85;
+          const halfWidth = radiusX * Math.sqrt(1 - (v * 2 - 1) ** 2);
+          ctx.beginPath();
+          ctx.moveTo(x - halfWidth, lineY);
+          ctx.bezierCurveTo(x - halfWidth * .45, lineY - height * .006,
+            x + halfWidth * .35, lineY + height * .012, x + halfWidth, lineY);
+          ctx.stroke();
+        }
         ctx.restore();
       }
 

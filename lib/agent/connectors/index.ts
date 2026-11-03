@@ -7,9 +7,11 @@ import * as tiktok from "./tiktok";
 import * as workspace from "./google";
 import * as crm from "./sheetsCrm";
 import * as finance from "./stripe";
+import * as paypal from "./paypal";
+import * as bank from "./wise";
 import * as analytics from "./analytics";
 
-export { searchConsole, meta, youtube, x, tiktok, workspace, crm, finance, analytics };
+export { searchConsole, meta, youtube, x, tiktok, workspace, crm, finance, paypal, bank, analytics };
 
 export function allConnectorStatuses(): ConnectorStatus[] {
   return [
@@ -21,6 +23,8 @@ export function allConnectorStatuses(): ConnectorStatus[] {
     ...workspace.status(),
     crm.status(),
     finance.status(),
+    paypal.status(),
+    bank.status(),
     analytics.status(),
   ];
 }

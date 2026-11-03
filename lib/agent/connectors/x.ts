@@ -1,11 +1,12 @@
 import type { ConnectorStatus, Report } from "../types";
+import { cred } from "@/lib/credentials";
 
 const API = "https://api.twitter.com/2";
 
 const REQUIRED_ENV_READ = ["X_BEARER_TOKEN", "X_USERNAME"] as const;
 
 function missingEnv(): string[] {
-  return REQUIRED_ENV_READ.filter((key) => !process.env[key]);
+  return REQUIRED_ENV_READ.filter((key) => !cred(key));
 }
 
 export function isConfigured(): boolean {
@@ -13,7 +14,7 @@ export function isConfigured(): boolean {
 }
 
 export function canPost(): boolean {
-  return Boolean(process.env.X_ACCESS_TOKEN);
+  return Boolean(cred("X_ACCESS_TOKEN"));
 }
 
 export function status(): ConnectorStatus {
@@ -30,9 +31,9 @@ export function status(): ConnectorStatus {
 
 export async function getXReport(): Promise<Report> {
   if (!isConfigured()) throw new Error(`X is not configured. Missing: ${missingEnv().join(", ")}. See SETUP.md.`);
-  const username = process.env.X_USERNAME!;
+  const username = cred("X_USERNAME")!;
   const res = await fetch(`${API}/users/by/username/${username}?user.fields=public_metrics`, {
-    headers: { Authorization: `Bearer ${process.env.X_BEARER_TOKEN}` },
+    headers: { Authorization: `Bearer ${cred("X_BEARER_TOKEN")}` },
   });
   const data = await res.json();
   if (!res.ok) throw new Error(`X API error: ${data?.detail || res.statusText}`);
@@ -56,12 +57,12 @@ export async function publishTweet(payload: { text: string }): Promise<string> {
   const res = await fetch(`${API}/tweets`, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${process.env.X_ACCESS_TOKEN}`,
+      Authorization: `Bearer ${cred("X_ACCESS_TOKEN")}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({ text: payload.text }),
   });
   const data = await res.json();
   if (!res.ok) throw new Error(`X API error: ${data?.detail || res.statusText}`);
-  return `Posted to X: https://x.com/${process.env.X_USERNAME}/status/${data.data.id}`;
+  return `Posted to X: https://x.com/${cred("X_USERNAME")}/status/${data.data.id}`;
 }

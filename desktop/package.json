@@ -1,0 +1,55 @@
+{
+  "name": "unc-assistant-desktop",
+  "productName": "UNC Assistant",
+  "version": "1.0.0",
+  "description": "Links your computer to your UNC AI Assistant account.",
+  "author": "UNC Team",
+  "homepage": "https://assistant.unctech.co",
+  "license": "UNLICENSED",
+  "private": true,
+  "type": "module",
+  "main": "src/main.mjs",
+  "scripts": {
+    "prepare-actions": "node scripts/prepare.mjs",
+    "start": "npm run prepare-actions && electron .",
+    "dist:mac": "npm run prepare-actions && electron-builder --mac",
+    "dist:win": "npm run prepare-actions && electron-builder --win",
+    "dist:linux": "npm run prepare-actions && electron-builder --linux",
+    "dist": "npm run prepare-actions && electron-builder --mac --win --linux"
+  },
+  "devDependencies": {
+    "electron": "45.2.1",
+    "electron-builder": "26.18.0",
+    "resedit": "3.1.0"
+  },
+  "build": {
+    "appId": "co.unctech.assistant",
+    "productName": "UNC Assistant",
+    "copyright": "© UNC Team",
+    "directories": { "output": "dist", "buildResources": "icons" },
+    "files": ["src/**/*", "icons/icon.png", "package.json"],
+    "afterPack": "scripts/after-pack.cjs",
+    "mac": {
+      "category": "public.app-category.productivity",
+      "icon": "icons/icon.icns",
+      "target": [{ "target": "dmg", "arch": ["universal"] }],
+      "identity": null,
+      "extendInfo": { "LSUIElement": true, "NSAppleEventsUsageDescription": "UNC Assistant opens and controls apps when you ask your assistant to." },
+      "artifactName": "UNC-Assistant-mac.${ext}"
+    },
+    "dmg": { "title": "UNC Assistant" },
+    "win": {
+      "icon": "icons/icon.ico",
+      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "signAndEditExecutable": false,
+      "artifactName": "UNC-Assistant-Setup-windows.${ext}"
+    },
+    "nsis": { "oneClick": true, "perMachine": false, "runAfterFinish": true, "installerIcon": "icons/icon.ico", "uninstallerIcon": "icons/icon.ico", "shortcutName": "UNC Assistant" },
+    "linux": {
+      "icon": "icons/icon.png",
+      "category": "Utility",
+      "target": [{ "target": "AppImage", "arch": ["x64"] }],
+      "artifactName": "UNC-Assistant-linux.${ext}"
+    }
+  }
+}
