@@ -402,8 +402,8 @@ export const toolDefinitions: Anthropic.Tool[] = [
   },
   {
     name: "propose_computer_script",
-    description: "For any other task on a linked computer: write a short script — AppleScript on macOS, PowerShell on Windows, bash on Linux (check computer_list for the system) — and queue it. Nothing runs until the user reads and approves it.",
-    input_schema: { type: "object", properties: { purpose: { type: "string" }, script: { type: "string" }, computer: { type: "string" } }, required: ["purpose", "script"] },
+    description: "For any other task on a linked computer: write a short script and queue it. Nothing runs until the user reads and approves it. Set language to what the script is written in: \"shell\" for terminal commands (zsh on macOS, bash on Linux), \"applescript\" for AppleScript on macOS, \"powershell\" on Windows (check computer_list for the system). Never use this for specs, hardware or battery — computer_system_info answers those at once, without approval.",
+    input_schema: { type: "object", properties: { purpose: { type: "string" }, script: { type: "string" }, language: { type: "string", enum: ["shell", "applescript", "powershell"] }, computer: { type: "string" } }, required: ["purpose", "script", "language"] },
   },
   /* ── This Mac: apps, Chrome profiles, websites ── */
   {
@@ -685,7 +685,7 @@ export async function executeTool(name: string, input: Record<string, unknown>):
       const userId = currentUserOrThrow(), device = pickDevice(userId, input.computer as string | undefined);
       const [action, args, summary] = name === "propose_computer_quit_app" ? ["quit_app", { name: input.name }, `Quit ${input.name} on ${device.name}`]
         : name === "propose_computer_power" ? ["power", { action: input.action }, `${String(input.action)[0].toUpperCase()}${String(input.action).slice(1)} ${device.name}`]
-        : ["run_script", { script: input.script }, `On ${device.name} (${device.os}): ${input.purpose}\n\n${input.script}`];
+        : ["run_script", { script: input.script, language: input.language }, `On ${device.name} (${device.os}), ${String(input.language || "script")}: ${input.purpose}\n\n${input.script}`];
       const pending = await createPendingAction({ platform: "computer", kind: "device_command", summary: summary as string, payload: { userId, deviceId: device.id, action, args } });
       return { text: `Queued for approval (id ${pending.id}). Nothing has happened on ${device.name} yet.`, pendingAction: pending };
     }

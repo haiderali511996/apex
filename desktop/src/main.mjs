@@ -21,6 +21,8 @@ const LINK_FILE = () => path.join(app.getPath("userData"), "link.json");
 const COMPUTER = os.hostname().replace(/\.local$/, "");
 
 let tray = null, loginWindow = null, link = null, loopId = 0;
+// A newer version on the website (downloads/app/latest.json), shown in the menu.
+let update = null;
 let state = { text: "Not signed in", last: "" };
 
 // ── The saved link (token encrypted with the OS keychain when available) ──
@@ -79,6 +81,19 @@ const toolItems = () => TOOLS.map(t => toolVersions[t.name]
   ? { label: `✓ ${t.name} ${toolVersions[t.name]}`, enabled: false }
   : { label: `Download ${t.name} (${t.why})…`, click: () => shell.openExternal(t.download) });
 
+// ── Updates ──
+
+const newer = (a, b) => { const x = a.split(".").map(Number), y = b.split(".").map(Number); for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0); return false; };
+
+async function checkForUpdate() {
+  try {
+    const res = await fetch(new URL("/downloads/app/latest.json", link?.server || DEFAULT_SERVER), { signal: AbortSignal.timeout(10_000) });
+    const latest = res.ok ? await res.json() : null;
+    update = latest?.version && newer(latest.version, app.getVersion()) ? latest : null;
+  } catch { /* offline: check again later */ }
+  await refreshTray();
+}
+
 // ── Start at login ──
 
 const linuxAutostart = () => path.join(os.homedir(), ".config", "autostart", "unc-assistant.desktop");
@@ -109,9 +124,10 @@ function trayIcon() {
 async function refreshTray() {
   if (!tray) return;
   const autostart = await startsAtLogin();
-  tray.setToolTip(`UNC Assistant — ${state.text}`);
+  tray.setToolTip(`UNC Assistant ${app.getVersion()} — ${state.text}${update ? ` · update ${update.version} available` : ""}`);
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: `UNC Assistant — ${state.text}`, enabled: false },
+    ...(update ? [{ label: `⬆ Update to version ${update.version}…`, click: () => shell.openExternal(new URL("/download", link?.server || DEFAULT_SERVER).href) }] : []),
     ...(state.last ? [{ label: `Last: ${state.last}`, enabled: false }] : []),
     { type: "separator" },
     link
@@ -242,6 +258,8 @@ else {
     link = await loadLink();
     await refreshTray();
     void checkTools();
+    void checkForUpdate();
+    setInterval(() => void checkForUpdate(), 6 * 3600_000);
     if (link) startLoop(); else showLogin();
   });
 }

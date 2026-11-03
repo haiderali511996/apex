@@ -214,9 +214,12 @@ if (-not $b) { "Battery: none (desktop computer)" } else {
   },
 
   // Sent only after the user read and approved the script in the app.
-  async run_script({ script }) {
+  async run_script({ script, language }) {
     if (!script) throw new Error("Empty script.");
-    const out = PLATFORM === "darwin" ? await osascript(script) : PLATFORM === "win32" ? await powershell(script) : await sh("bash", ["-c", script], 60_000);
+    // language says what the script is: terminal commands, AppleScript or PowerShell.
+    const out = PLATFORM === "win32" ? await powershell(script)
+      : PLATFORM === "darwin" && language !== "shell" ? await osascript(script)
+      : await sh(PLATFORM === "darwin" ? "/bin/zsh" : "bash", ["-c", script], 60_000);
     return out ? `Done. Output: ${out.slice(0, 2000)}` : "Done.";
   },
 };
