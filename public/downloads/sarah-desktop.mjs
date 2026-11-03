@@ -148,6 +148,51 @@ export const ACTIONS = {
     return action === "play" ? "Playing." : "Paused.";
   },
 
+  // Read-only: what this computer is — model, processor, graphics, memory, storage and system.
+  async system_info() {
+    const gb = (bytes) => `${Math.round(Number(bytes) / 1024 ** 3)} GB`;
+    const disk = async () => {
+      if (PLATFORM === "win32") return "";
+      const [, total, , avail] = (await sh("df", ["-k", "/"])).split("\n").pop().trim().split(/\s+/);
+      return `Storage: ${gb(total * 1024)} (${gb(avail * 1024)} free)`;
+    };
+    if (PLATFORM === "darwin") {
+      const data = JSON.parse(await sh("system_profiler", ["SPHardwareDataType", "SPDisplaysDataType", "SPPowerDataType", "-json"], 30_000));
+      const hw = data.SPHardwareDataType?.[0] ?? {};
+      const cpu = hw.chip_type || (await sh("sysctl", ["-n", "machdep.cpu.brand_string"]).catch(() => hw.cpu_type || ""));
+      const gpus = (data.SPDisplaysDataType ?? []).map(g => `${g.sppci_model}${g.sppci_cores ? ` (${g.sppci_cores}-core)` : ""}${g.spdisplays_vram ? `, ${g.spdisplays_vram}` : ""}`);
+      const name = await sh("sw_vers", ["-productName"]), version = await sh("sw_vers", ["-productVersion"]);
+      return [`Model: ${hw.machine_name ?? "Mac"}${hw.machine_model ? ` (${hw.machine_model})` : ""}`, `Processor: ${cpu}${hw.number_processors ? ` — ${String(hw.number_processors).replace(/^proc /, "")} cores` : ""}`,
+        `Graphics: ${gpus.join("; ") || "unknown"}`, `Memory: ${hw.physical_memory ?? gb(os.totalmem())}`, await disk(), `System: ${name} ${version}`, await macBattery(data.SPPowerDataType)].join("\n");
+    }
+    if (PLATFORM === "win32") {
+      return powershell(`$cs = Get-CimInstance Win32_ComputerSystem; $p = Get-CimInstance Win32_Processor | Select-Object -First 1; $os = Get-CimInstance Win32_OperatingSystem; $d = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='C:'"
+"Model: $($cs.Manufacturer) $($cs.Model)"
+"Processor: $($p.Name.Trim()) — $($p.NumberOfCores) cores"
+"Graphics: " + ((Get-CimInstance Win32_VideoController | ForEach-Object { $_.Name }) -join '; ')
+"Memory: $([math]::Round($cs.TotalPhysicalMemory / 1GB)) GB"
+"Storage: $([math]::Round($d.Size / 1GB)) GB ($([math]::Round($d.FreeSpace / 1GB)) GB free)"
+"System: $($os.Caption) $($os.Version)"
+$b = Get-CimInstance Win32_Battery | Select-Object -First 1
+if (-not $b) { "Battery: none (desktop computer)" } else {
+  $state = if ($b.BatteryStatus -eq 2) { "plugged in" } else { "on battery" }
+  $left = if ($b.EstimatedRunTime -and $b.EstimatedRunTime -lt 71582788) { ", about $([math]::Floor($b.EstimatedRunTime / 60))h $($b.EstimatedRunTime % 60)m left" } else { "" }
+  $cycles = (Get-CimInstance -Namespace root\wmi -ClassName BatteryCycleCount -ErrorAction SilentlyContinue | Select-Object -First 1).CycleCount
+  $full = (Get-CimInstance -Namespace root\wmi -ClassName BatteryFullChargedCapacity -ErrorAction SilentlyContinue | Select-Object -First 1).FullChargedCapacity
+  $design = (Get-CimInstance -Namespace root\wmi -ClassName BatteryStaticData -ErrorAction SilentlyContinue | Select-Object -First 1).DesignedCapacity
+  $health = if ($full -and $design) { " · health $([math]::Round(100 * $full / $design))% of original capacity" } else { "" }
+  "Battery: $($b.EstimatedChargeRemaining)%, $state$left" + $(if ($cycles) { " · $cycles cycles" } else { "" }) + $health
+}`);
+    }
+    const read = (f) => readFile(f, "utf8").then(t => t.trim(), () => "");
+    const release = (await read("/etc/os-release")).match(/^PRETTY_NAME="?([^"\n]+)/m)?.[1] ?? "Linux";
+    const cpu = (await read("/proc/cpuinfo")).match(/^model name\s*:\s*(.+)$/m)?.[1] ?? os.cpus()[0]?.model ?? "unknown";
+    const gpus = await sh("lspci", []).then(t => t.split("\n").filter(l => /vga|3d|display/i.test(l)).map(l => l.replace(/^\S+\s+[^:]+:\s*/, "")), () => []);
+    const model = `${await read("/sys/devices/virtual/dmi/id/sys_vendor")} ${await read("/sys/devices/virtual/dmi/id/product_name")}`.trim();
+    return [`Model: ${model || "unknown"}`, `Processor: ${cpu} — ${os.cpus().length} threads`, `Graphics: ${gpus.join("; ") || "unknown (install pciutils for lspci)"}`,
+      `Memory: ${gb(os.totalmem())}`, await disk(), `System: ${release} (kernel ${os.release()})`, await linuxBattery(read)].join("\n");
+  },
+
   // Sent only after the user approved it in the app.
   async quit_app({ name }) {
     if (PLATFORM === "darwin") await osascript(`on run argv
@@ -175,6 +220,36 @@ export const ACTIONS = {
     return out ? `Done. Output: ${out.slice(0, 2000)}` : "Done.";
   },
 };
+
+// ── Battery (part of system_info) ──
+
+const hm = (hours) => `${Math.floor(hours)}h ${String(Math.round((hours % 1) * 60)).padStart(2, "0")}m`;
+
+async function macBattery(power = []) {
+  const batt = await sh("pmset", ["-g", "batt"]).catch(() => "");
+  const line = batt.split("\n").find(l => /InternalBattery/.test(l));
+  if (!line) return "Battery: none (desktop Mac)";
+  const pct = line.match(/(\d+)%/)?.[1], state = line.match(/%;\s*([^;]+);/)?.[1] ?? "";
+  const time = line.match(/(\d+:\d+) remaining/)?.[1];
+  const timeText = time ? (/charging/.test(state) && !/discharging/.test(state) ? `, ${time} until full` : `, about ${time} left`) : "";
+  const reg = await sh("ioreg", ["-rn", "AppleSmartBattery"]).catch(() => "");
+  const num = (key) => Number(reg.match(new RegExp(`"${key}" = (\\d+)`))?.[1]) || 0;
+  const cycles = num("CycleCount"), rated = num("DesignCycleCount9C"), max = num("AppleRawMaxCapacity") || num("MaxCapacity"), design = num("DesignCapacity");
+  const condition = power.find(p => p.sppower_battery_health_info)?.sppower_battery_health_info?.sppower_battery_health;
+  return `Battery: ${pct}%, ${state}${timeText}` + (cycles ? ` · ${cycles} cycles${rated ? ` (rated for about ${rated})` : ""}` : "")
+    + (max && design && max <= design * 1.2 ? ` · health ${Math.round((100 * max) / design)}% of original capacity` : "") + (condition ? ` · condition ${condition}` : "");
+}
+
+async function linuxBattery(read) {
+  const dir = await sh("sh", ["-c", "ls -d /sys/class/power_supply/BAT* 2>/dev/null | head -1"]).catch(() => "");
+  if (!dir) return "Battery: none";
+  const v = async (f) => read(`${dir}/${f}`);
+  const pct = await v("capacity"), status = (await v("status")).toLowerCase(), cycles = Number(await v("cycle_count")) || 0;
+  const full = Number(await v("energy_full") || await v("charge_full")), design = Number(await v("energy_full_design") || await v("charge_full_design"));
+  const now = Number(await v("energy_now") || await v("charge_now")), rate = Number(await v("power_now") || await v("current_now"));
+  const left = rate > 0 ? (status === "discharging" ? `, about ${hm(now / rate)} left` : status === "charging" ? `, ${hm((full - now) / rate)} until full` : "") : "";
+  return `Battery: ${pct}%, ${status}${left}` + (cycles ? ` · ${cycles} cycles` : "") + (full && design ? ` · health ${Math.round((100 * full) / design)}% of original capacity` : "");
+}
 
 // ── Linking and the work loop ──
 

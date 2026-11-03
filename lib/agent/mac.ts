@@ -171,3 +171,43 @@ export async function controlMediaApps(action: "pause" | "play" | "status") {
     return (e as { stdout?: string }).stdout?.trim() || "No music app (Music, Spotify, VLC, QuickTime) is running.";
   }
 }
+
+/** Read-only: this Mac's model, chip, graphics, memory, storage and macOS version. */
+export async function systemInfo() {
+  onMac();
+  const { stdout } = await run("system_profiler", ["SPHardwareDataType", "SPDisplaysDataType", "SPPowerDataType", "-json"], { timeout: 30_000, maxBuffer: 8_000_000 });
+  const data = JSON.parse(stdout) as {
+    SPHardwareDataType?: { machine_name?: string; machine_model?: string; chip_type?: string; cpu_type?: string; number_processors?: string | number; physical_memory?: string }[];
+    SPDisplaysDataType?: { sppci_model?: string; sppci_cores?: string; spdisplays_vram?: string }[];
+    SPPowerDataType?: { sppower_battery_health_info?: { sppower_battery_health?: string } }[];
+  };
+  const hw = data.SPHardwareDataType?.[0] ?? {};
+  const cpu = hw.chip_type || (await run("sysctl", ["-n", "machdep.cpu.brand_string"]).then(r => r.stdout.trim(), () => hw.cpu_type || "unknown"));
+  const gpus = (data.SPDisplaysDataType ?? []).map(g => `${g.sppci_model}${g.sppci_cores ? ` (${g.sppci_cores}-core)` : ""}${g.spdisplays_vram ? `, ${g.spdisplays_vram}` : ""}`);
+  const version = (await run("sw_vers", ["-productVersion"])).stdout.trim();
+  const df = (await run("df", ["-k", "/"])).stdout.trim().split("\n").pop()!.trim().split(/\s+/);
+  const gb = (kb: string) => `${Math.round(Number(kb) / 1024 ** 2)} GB`;
+  return [
+    `Model: ${hw.machine_name ?? "Mac"}${hw.machine_model ? ` (${hw.machine_model})` : ""}`,
+    `Processor: ${cpu}${hw.number_processors ? ` — ${String(hw.number_processors).replace(/^proc /, "")} cores` : ""}`,
+    `Graphics: ${gpus.join("; ") || "unknown"}`,
+    `Memory: ${hw.physical_memory ?? `${Math.round(os.totalmem() / 1024 ** 3)} GB`}`,
+    `Storage: ${gb(df[1])} (${gb(df[3])} free)`,
+    `System: macOS ${version}`,
+    await battery(data.SPPowerDataType?.find(p => p.sppower_battery_health_info)?.sppower_battery_health_info?.sppower_battery_health),
+  ].join("\n");
+}
+
+/** Charge, time left or to full, cycle count and health (current vs. design capacity). */
+async function battery(condition?: string) {
+  const line = (await run("pmset", ["-g", "batt"]).then(r => r.stdout, () => "")).split("\n").find(l => /InternalBattery/.test(l));
+  if (!line) return "Battery: none (desktop Mac)";
+  const pct = line.match(/(\d+)%/)?.[1], state = line.match(/%;\s*([^;]+);/)?.[1] ?? "";
+  const time = line.match(/(\d+:\d+) remaining/)?.[1];
+  const timeText = time ? (/charging/.test(state) && !/discharging/.test(state) ? `, ${time} until full` : `, about ${time} left`) : "";
+  const reg = await run("ioreg", ["-rn", "AppleSmartBattery"]).then(r => r.stdout, () => "");
+  const num = (key: string) => Number(reg.match(new RegExp(`"${key}" = (\\d+)`))?.[1]) || 0;
+  const cycles = num("CycleCount"), rated = num("DesignCycleCount9C"), max = num("AppleRawMaxCapacity") || num("MaxCapacity"), design = num("DesignCapacity");
+  return `Battery: ${pct}%, ${state}${timeText}` + (cycles ? ` · ${cycles} cycles${rated ? ` (rated for about ${rated})` : ""}` : "")
+    + (max && design && max <= design * 1.2 ? ` · health ${Math.round((100 * max) / design)}% of original capacity` : "") + (condition ? ` · condition ${condition}` : "");
+}

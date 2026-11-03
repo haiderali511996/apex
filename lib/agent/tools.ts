@@ -10,7 +10,7 @@ import { SPECIALISTS, specialistKeys } from "./roles";
 import { askAboutChats, askDeveloper, listProjects, nameProject, resolveProject } from "./developer";
 import { isOnline, listDevices, pickDevice, runOnDevice } from "@/lib/devices";
 import { currentUserId } from "@/lib/credentials";
-import { controlMediaApps, focusChromeTab, listChromeProfiles, listChromeTabs, listRunningApps, openApp, openUrl, setVolume } from "./mac";
+import { controlMediaApps, focusChromeTab, systemInfo, listChromeProfiles, listChromeTabs, listRunningApps, openApp, openUrl, setVolume } from "./mac";
 import type { ClientAction, PendingAction, Report } from "./types";
 
 export const toolDefinitions: Anthropic.Tool[] = [
@@ -362,6 +362,11 @@ export const toolDefinitions: Anthropic.Tool[] = [
     input_schema: { type: "object", properties: {} },
   },
   {
+    name: "computer_system_info",
+    description: "What a linked computer is: model, processor (CPU), graphics card (GPU), memory (RAM), storage, operating system and battery (charge, time left, cycle count, health). Read-only. Use this for any question about the computer's specs, hardware or battery.",
+    input_schema: { type: "object", properties: { computer: { type: "string", description: "Optional: the computer's name or system (Windows, macOS, Linux)." } } },
+  },
+  {
     name: "computer_open_app",
     description: "Open an app on a linked computer. Omit computer to use the most recently active one.",
     input_schema: { type: "object", properties: { name: { type: "string", description: "The app, e.g. \"Google Chrome\", \"Notepad\", \"Spotify\"." }, computer: { type: "string", description: "Optional: the computer's name or system (Windows, macOS, Linux)." } }, required: ["name"] },
@@ -401,6 +406,11 @@ export const toolDefinitions: Anthropic.Tool[] = [
     input_schema: { type: "object", properties: { purpose: { type: "string" }, script: { type: "string" }, computer: { type: "string" } }, required: ["purpose", "script"] },
   },
   /* ── This Mac: apps, Chrome profiles, websites ── */
+  {
+    name: "mac_system_info",
+    description: "What this Mac is: model, chip/processor, graphics, memory (RAM), storage, macOS version and battery (charge, time left, cycle count, health, condition). Read-only. Use this — never mac_applescript — for any question about the Mac's specs, hardware or battery.",
+    input_schema: { type: "object", properties: {} },
+  },
   {
     name: "mac_list_apps",
     description: "List the apps open on Haider's MacBook right now, and which one is in front.",
@@ -466,7 +476,7 @@ export const toolDefinitions: Anthropic.Tool[] = [
   },
   {
     name: "propose_mac_applescript",
-    description: "For any other Mac task the tools above can't do (Finder, System Settings, Notes, Reminders, window layout, clicking in an app…): write an AppleScript that does it and queue it. Nothing runs until Haider reads and approves it in the UI. Keep the script short and focused on exactly what he asked.",
+    description: "For any other Mac task the tools above can't do (Finder, System Settings, Notes, Reminders, window layout, clicking in an app…): write an AppleScript that does it and queue it. Nothing runs until Haider reads and approves it in the UI. Keep the script short and focused on exactly what he asked. It must be real AppleScript, never a bare shell command (wrap any shell command in do shell script \"…\"). Never use this for specs, hardware or battery questions — mac_system_info answers those at once.",
     input_schema: {
       type: "object",
       properties: {
@@ -650,6 +660,10 @@ export async function executeTool(name: string, input: Record<string, unknown>):
       const devices = listDevices(currentUserOrThrow());
       return { text: devices.length ? devices.map(d => `${d.name} (${d.os}) — ${isOnline(d) ? "online" : "offline"}`).join("\n") : "No computer is linked yet. Link one on the Account page with the desktop app." };
     }
+    case "computer_system_info": {
+      const userId = currentUserOrThrow(), device = pickDevice(userId, input.computer as string | undefined);
+      return { text: `${device.name}:\n${await runOnDevice(userId, device.id, "system_info", {}, 45_000)}` };
+    }
     case "computer_open_app": {
       const userId = currentUserOrThrow(), device = pickDevice(userId, input.computer as string | undefined);
       return { text: `${device.name}: ${await runOnDevice(userId, device.id, "open_app", { name: input.name })}` };
@@ -676,6 +690,8 @@ export async function executeTool(name: string, input: Record<string, unknown>):
       return { text: `Queued for approval (id ${pending.id}). Nothing has happened on ${device.name} yet.`, pendingAction: pending };
     }
 
+    case "mac_system_info":
+      return { text: await systemInfo() };
     case "mac_list_apps": {
       const apps = await listRunningApps();
       return { text: `In front: ${apps.frontmost}\nOpen: ${apps.running.join(", ")}` };
