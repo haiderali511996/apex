@@ -364,7 +364,7 @@ export const toolDefinitions: Anthropic.Tool[] = [
   {
     name: "computer_system_info",
     description: "What a linked computer is: model, processor (CPU), graphics card (GPU), memory (RAM), storage, operating system and battery (charge, time left, cycle count, health). Read-only. Use this for any question about the computer's specs, hardware or battery.",
-    input_schema: { type: "object", properties: { computer: { type: "string", description: "Optional: the computer's name or system (Windows, macOS, Linux)." } } },
+    input_schema: { type: "object", properties: { computer: { type: "string", description: "Optional: the computer's name or system (Windows, macOS, Linux). Leave it out to check every online computer — then say which answer is which." } } },
   },
   {
     name: "computer_open_app",
@@ -661,8 +661,16 @@ export async function executeTool(name: string, input: Record<string, unknown>):
       return { text: devices.length ? devices.map(d => `${d.name} (${d.os}) — ${isOnline(d) ? "online" : "offline"}`).join("\n") : "No computer is linked yet. Link one on the Account page with the desktop app." };
     }
     case "computer_system_info": {
-      const userId = currentUserOrThrow(), device = pickDevice(userId, input.computer as string | undefined);
-      return { text: `${device.name}:\n${await runOnDevice(userId, device.id, "system_info", {}, 45_000)}` };
+      const userId = currentUserOrThrow();
+      // Named: that computer. Otherwise every online one, labelled, so "my laptop" isn't a guess.
+      const devices = input.computer ? [pickDevice(userId, input.computer as string)] : listDevices(userId).filter(isOnline);
+      if (!devices.length) return { text: listDevices(userId).length ? "None of the linked computers is online — start the desktop app on the one you mean." : "No computer is linked yet. Link one on the Account page with the desktop app." };
+      const reports = await Promise.all(devices.map(async d => {
+        const info = await runOnDevice(userId, d.id, "system_info", {}, 45_000).catch(err => `couldn't read it (${err instanceof Error ? err.message : err})`);
+        const stale = !/^Battery:/m.test(info) && !/couldn't/.test(info) ? "\n(This computer's desktop app is out of date and can't read the battery — update it from the Download page.)" : "";
+        return `${d.name} (${d.os}):\n${info}${stale}`;
+      }));
+      return { text: reports.join("\n\n") };
     }
     case "computer_open_app": {
       const userId = currentUserOrThrow(), device = pickDevice(userId, input.computer as string | undefined);
