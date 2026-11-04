@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { generateImage } from "@/lib/agent/geminiImage";
 import { GeminiError } from "@/lib/agent/gemini";
 import { enterUser } from "@/lib/credentials";
+import { hasLogo, LOGO_SPACE_NOTE, saveDesign, wantsBrandLogo } from "@/lib/designs";
 
 export const runtime = "nodejs";
 
@@ -25,8 +26,18 @@ export async function POST(req: NextRequest) {
   if (photo && photo.data.length > 8_000_000) return NextResponse.json({ error: "That photo is too large." }, { status: 413 });
 
   try {
-    const result = await generateImage(instruction.trim(), photo ?? undefined);
-    return NextResponse.json(result);
+    // Post designs carry the account's real logo, stamped on afterwards
+    // exactly as uploaded; the model is told to leave room and draw none.
+    const withLogo = wantsBrandLogo(instruction, !!photo) && await hasLogo(guard.user.id);
+    const result = await generateImage(instruction.trim() + (withLogo ? LOGO_SPACE_NOTE : ""), photo ?? undefined);
+    // Saved so it can be posted; a failure to save still shows the picture.
+    try {
+      const saved = await saveDesign(guard.user.id, instruction.trim(), result.image, withLogo);
+      return NextResponse.json({ ...result, image: saved.image, designId: saved.design.id, url: saved.design.url });
+    } catch (err) {
+      console.error("[agent/imagine] save", err);
+      return NextResponse.json(result);
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[agent/imagine]", err);

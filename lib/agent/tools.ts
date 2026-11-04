@@ -10,6 +10,7 @@ import { SPECIALISTS, specialistKeys } from "./roles";
 import { askAboutChats, askDeveloper, listProjects, nameProject, resolveProject } from "./developer";
 import { isOnline, listDevices, pickDevice, runOnDevice } from "@/lib/devices";
 import { currentUserId } from "@/lib/credentials";
+import { findDesign, listDesigns } from "@/lib/designs";
 import { controlMediaApps, focusChromeTab, systemInfo, listChromeProfiles, listChromeTabs, listRunningApps, openApp, openUrl, setVolume } from "./mac";
 import type { ClientAction, PendingAction, Report } from "./types";
 import { searchWeb } from "./gemini";
@@ -67,27 +68,34 @@ export const toolDefinitions: Anthropic.Tool[] = [
     input_schema: { type: "object", properties: {} },
   },
   {
+    name: "list_designs",
+    description: "The pictures the Design agent made for this user recently (newest first), with ids for attaching one to a post. Use when asked to post a design or picture that was made.",
+    input_schema: { type: "object", properties: {} },
+  },
+  {
     name: "propose_facebook_post",
     description: "Draft a Facebook Page post for the user to review and approve. This does NOT publish anything — it only queues the post for the user to confirm in the UI.",
     input_schema: {
       type: "object",
       properties: {
         message: { type: "string", description: "Post text." },
-        link: { type: "string", description: "Optional link to attach." },
+        link: { type: "string", description: "Optional link to attach (ignored when a picture is attached; put the link in the text instead)." },
+        design_id: { type: "string", description: "Attach a picture the Design agent made: its id from list_designs, or \"latest\" for the most recent one." },
       },
       required: ["message"],
     },
   },
   {
     name: "propose_instagram_post",
-    description: "Draft an Instagram post (image + caption) for the user to review and approve. Does NOT publish anything.",
+    description: "Draft an Instagram post (image + caption) for the user to review and approve. Does NOT publish anything. Instagram needs a picture: use design_id for one the Design agent made.",
     input_schema: {
       type: "object",
       properties: {
-        imageUrl: { type: "string", description: "Publicly reachable image URL." },
+        design_id: { type: "string", description: "Attach a picture the Design agent made: its id from list_designs, or \"latest\" for the most recent one." },
+        imageUrl: { type: "string", description: "Only for a picture that is already online elsewhere: its public URL." },
         caption: { type: "string" },
       },
-      required: ["imageUrl", "caption"],
+      required: ["caption"],
     },
   },
   {
@@ -95,7 +103,10 @@ export const toolDefinitions: Anthropic.Tool[] = [
     description: "Draft a post on X for the user to review and approve. Does NOT publish anything.",
     input_schema: {
       type: "object",
-      properties: { text: { type: "string", description: "Tweet text, max 280 chars." } },
+      properties: {
+        text: { type: "string", description: "Tweet text, max 280 chars." },
+        design_id: { type: "string", description: "Attach a picture the Design agent made: its id from list_designs, or \"latest\" for the most recent one." },
+      },
       required: ["text"],
     },
   },
@@ -502,6 +513,14 @@ function reportToText(r: Report): string {
 
 export type ToolRunResult = { text: string; pendingAction?: PendingAction; clientAction?: ClientAction };
 
+/** The design a post should carry, by id or "latest"; errors say what to do instead. */
+function attachDesign(id: unknown) {
+  if (typeof id !== "string" || !id.trim()) return null;
+  const design = findDesign(currentUserOrThrow(), id.trim());
+  if (!design) throw new Error(id.trim() === "latest" ? "No design has been made yet — ask the Design agent for one first." : "That design wasn't found; use list_designs for the ids.");
+  return design;
+}
+
 function currentUserOrThrow(): string {
   const id = currentUserId();
   if (!id) throw new Error("No signed-in account for this request.");
@@ -538,30 +557,40 @@ export async function executeTool(name: string, input: Record<string, unknown>):
       if (!pending.length) return { text: "No pending actions awaiting approval." };
       return { text: pending.map((a) => `${a.id}: [${a.platform}] ${a.summary}`).join("\n") };
     }
+    case "list_designs": {
+      const designs = listDesigns(currentUserOrThrow());
+      if (!designs.length) return { text: "No designs have been made yet. Ask the Design agent for one first." };
+      return { text: designs.map((d, i) => `${i === 0 ? "(latest) " : ""}id ${d.id} · ${new Date(d.createdAt).toLocaleString("en-GB")} · ${d.branded ? "with the brand logo · " : ""}"${d.prompt}"`).join("\n") };
+    }
     case "propose_facebook_post": {
+      const design = attachDesign(input.design_id);
       const action = await createPendingAction({
         platform: "meta",
         kind: "facebook_post",
-        summary: `Post to Facebook Page: "${input.message}"`,
-        payload: { message: input.message, link: input.link },
+        summary: `Post to Facebook Page${design ? " with the picture" : ""}: "${input.message}"`,
+        payload: { message: input.message, link: design ? undefined : input.link, ...(design ? { imageUrl: design.url } : {}) },
       });
       return { text: `Draft queued for your approval (id ${action.id}). Nothing has been posted yet.`, pendingAction: action };
     }
     case "propose_instagram_post": {
+      const design = attachDesign(input.design_id);
+      const imageUrl = design?.url ?? (typeof input.imageUrl === "string" && /^https:\/\//.test(input.imageUrl) ? input.imageUrl : null);
+      if (!imageUrl) return { text: "Instagram needs a picture. Ask the Design agent to make one, then attach it with design_id \"latest\"." };
       const action = await createPendingAction({
         platform: "meta",
         kind: "instagram_post",
         summary: `Post to Instagram: "${input.caption}"`,
-        payload: { imageUrl: input.imageUrl, caption: input.caption },
+        payload: { imageUrl, caption: input.caption },
       });
       return { text: `Draft queued for your approval (id ${action.id}). Nothing has been posted yet.`, pendingAction: action };
     }
     case "propose_tweet": {
+      const design = attachDesign(input.design_id);
       const action = await createPendingAction({
         platform: "x",
         kind: "tweet",
-        summary: `Post to X: "${input.text}"`,
-        payload: { text: input.text },
+        summary: `Post to X${design ? " with the picture" : ""}: "${input.text}"`,
+        payload: { text: input.text, ...(design ? { imageUrl: design.url, designId: design.id } : {}) },
       });
       return { text: `Draft queued for your approval (id ${action.id}). Nothing has been posted yet.`, pendingAction: action };
     }

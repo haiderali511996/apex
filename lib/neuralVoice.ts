@@ -13,7 +13,7 @@
 
 import { updateSpeechMotion, resetSpeechMotion, speechAudioLevel, updateAudioSpeechMotion } from "./speechMotion";
 import type { SpeakHandlers } from "./speech";
-import { voiceElement, releaseVoiceElement } from "./audioUnlock";
+import { voiceElement, releaseVoiceElement, onGesture } from "./audioUnlock";
 import { speechLang, type SpeechLang } from "./speechLanguage";
 
 type Alignment = {
@@ -317,16 +317,29 @@ function playPiece(payload: TtsResponse, piece: Piece, handlers: SpeakHandlers, 
       finish("failed");
     };
 
-    el.play().catch((err: unknown) => {
-      // Autoplay was blocked, or the element was torn down. The system voice
-      // is subject to the same gesture rules, but let the caller decide.
+    let stopWaiting: (() => void) | null = null;
+    const giveUp = (reason: string) => {
+      stopWaiting?.(); stopWaiting = null;
       if (frame) cancelAnimationFrame(frame);
       frame = 0;
-      unavailableReason =
-        (err as Error)?.name === "NotAllowedError"
-          ? "The browser blocked audio until you tap the page — tap anywhere once, then try again."
-          : "Audio playback failed to start.";
+      unavailableReason = reason;
       finish("failed");
+    };
+    el.play().catch((err: unknown) => {
+      if (settled) return;
+      if ((err as Error)?.name !== "NotAllowedError") return giveUp("Audio playback failed to start.");
+      // Phones block sound until the page itself is tapped (allowing the
+      // microphone doesn't count). Keep this reply ready and play it on the
+      // next tap — inside the tap, the phone allows it — instead of failing.
+      clearTimeout(startTimeout);
+      handlers.onWarning?.("Tap anywhere on the page to hear Sarah. Your phone allows sound only after a tap.");
+      stopWaiting = onGesture(() => {
+        if (settled) { stopWaiting?.(); return; }
+        el.play().then(() => { stopWaiting?.(); stopWaiting = null; handlers.onWarning?.(""); }).catch(() => { /* not a qualifying tap; wait for the next */ });
+      });
+      const prevCancel = finishCanceled;
+      finishCanceled = () => { stopWaiting?.(); stopWaiting = null; prevCancel?.(); };
+      setTimeout(() => { if (!settled && el.paused) giveUp("Sound is blocked until you tap the page. Tap anywhere, then ask again."); }, 120_000);
     });
   });
 }

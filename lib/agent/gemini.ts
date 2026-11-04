@@ -20,7 +20,7 @@ export type WebSource = { title: string; uri: string };
  * One Gemini turn. `search: true` lets it look things up with Google Search;
  * the pages it used come back as `sources` on the reply.
  */
-export async function generateGemini(system: string, contents: GeminiContent[], declarations?: unknown[], opts: { search?: boolean } = {}): Promise<GeminiContent & { sources?: WebSource[] }> {
+export async function generateGemini(system: string, contents: GeminiContent[], declarations?: unknown[], opts: { search?: boolean; json?: boolean } = {}): Promise<GeminiContent & { sources?: WebSource[] }> {
   const key = cred("GEMINI_API_KEY")?.trim();
   if (!key) throw new GeminiError(isOwnerRequest() ? "Add GEMINI_API_KEY to .env.local using a free-tier key from aistudio.google.com, then restart Sarah." : "Add your Gemini API key on the Connections page (it's free from aistudio.google.com).", 503);
   const model = process.env.GEMINI_MODEL?.trim() || "gemini-3.1-flash-lite";
@@ -30,7 +30,8 @@ export async function generateGemini(system: string, contents: GeminiContent[], 
     signal: AbortSignal.timeout(60_000),
     body: JSON.stringify({
       systemInstruction: { parts: [{ text: system }] }, contents,
-      generationConfig: { maxOutputTokens: 2048 },
+      // JSON answers (transcription) are also run cold, so nothing is invented.
+      generationConfig: opts.json ? { maxOutputTokens: 2048, temperature: 0, responseMimeType: "application/json" } : { maxOutputTokens: 2048 },
       ...(opts.search ? { tools: [{ google_search: {} }] } : declarations?.length ? { tools: [{ functionDeclarations: declarations }] } : {}),
     }),
   });

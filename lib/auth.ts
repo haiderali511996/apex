@@ -156,7 +156,7 @@ export async function deleteAccount(userId: string) {
   const db = database();
   db.exec("BEGIN");
   try {
-    for (const table of ["sessions", "settings", "subscriptions", "credentials", "posts", "devices", "device_commands", "usage", "music_tracks", "billing_cards"]) {
+    for (const table of ["sessions", "settings", "subscriptions", "credentials", "posts", "devices", "device_commands", "usage", "music_tracks", "billing_cards", "designs"]) {
       try { db.prepare(`DELETE FROM ${table} WHERE user_id = ?`).run(userId); } catch { /* table not created yet */ }
     }
     db.prepare("UPDATE payments SET user_id = 'deleted' WHERE user_id = ?").run(userId);

@@ -180,6 +180,7 @@ export default function Account() {
       <button type="button" className="btn btn-ghost btn-small" style={{ justifySelf: "start" }} onClick={async () => { await fetch("/api/auth/logout", { method: "POST" }); window.location.href = "/welcome"; }}>Log out</button>
 
       <Computers />
+      <BrandLogo />
       <Music />
 
       {user.role !== "owner" && <DeleteAccount />}
@@ -262,6 +263,45 @@ function Computers() {
 }
 
 type MusicTrack = { id: string; name: string; size: number };
+
+/** The logo stamped onto post designs, exactly as uploaded. */
+function BrandLogo() {
+  const [has, setHas] = useState<boolean | null>(null);
+  const [version, setVersion] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  useEffect(() => { void fetch("/api/brand-logo").then(r => r.ok ? r.json() : null).then(b => b && setHas(b.logo)); }, []);
+  const upload = async (file: File | undefined) => {
+    if (!file) return;
+    setBusy(true); setError("");
+    const form = new FormData();
+    form.append("logo", file);
+    const res = await fetch("/api/brand-logo", { method: "POST", body: form }).catch(() => null);
+    const body = res ? await res.json().catch(() => ({})) : {};
+    if (res?.ok) { setHas(true); setVersion(v => v + 1); } else setError(body.error || "Upload failed — check your connection.");
+    setBusy(false);
+  };
+  const remove = async () => {
+    await fetch("/api/brand-logo", { method: "DELETE" });
+    setHas(false);
+  };
+  return (
+    <section className="card" style={{ padding: 24 }}>
+      <h3 style={{ fontSize: 18 }}>Your brand logo</h3>
+      <p style={{ marginBottom: 14 }}>Post designs from the Design agent get this logo in the corner, exactly as you upload it. The AI never redraws it. A PNG with a transparent background looks best.</p>
+      {has && <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 14 }}>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={`/api/brand-logo?image&v=${version}`} alt="Your brand logo" style={{ width: 72, height: 72, objectFit: "contain", borderRadius: 10, border: "1px solid var(--line)", background: "repeating-conic-gradient(#8882 0 25%, transparent 0 50%) 0 0 / 14px 14px" }} />
+        <button type="button" className="btn btn-ghost btn-small" onClick={remove}>Remove</button>
+      </div>}
+      <label className="btn btn-primary btn-small" style={{ cursor: busy ? "wait" : "pointer", opacity: busy ? 0.7 : 1 }}>
+        {busy ? "Uploading…" : has ? "Replace logo" : "Upload logo"}
+        <input type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" hidden disabled={busy} onChange={e => { void upload(e.target.files?.[0]); e.target.value = ""; }} />
+      </label>
+      {error && <p className="form-error" style={{ marginTop: 8 }}>{error}</p>}
+    </section>
+  );
+}
 
 /** This account's own background music: uploads, list and delete. Only this account can play them. */
 function Music() {

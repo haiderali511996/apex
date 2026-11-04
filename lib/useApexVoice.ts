@@ -116,6 +116,9 @@ export function useApexVoice(options: {
   // while Sarah thinks and speaks — and returns once neither has spoken for a
   // few seconds. Only the music pauses; the mic stays open.
   const musicTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // While the mic is open the music stays off: music reaching the mic was
+  // being heard as speech, and turned into requests nobody made.
+  const micOpenRef = useRef(false);
   const holdMusic = useCallback(() => {
     if (musicTimer.current) { clearTimeout(musicTimer.current); musicTimer.current = null; }
     pauseMusic();
@@ -124,7 +127,7 @@ export function useApexVoice(options: {
     if (musicTimer.current) clearTimeout(musicTimer.current);
     musicTimer.current = setTimeout(() => {
       musicTimer.current = null;
-      if (stateRef.current !== "thinking" && stateRef.current !== "speaking") playMusic();
+      if (stateRef.current !== "thinking" && stateRef.current !== "speaking" && !micOpenRef.current) playMusic();
     }, MUSIC_RESUME_MS);
   }, []);
   const setVoiceState = useCallback((value: VoiceState) => {
@@ -457,6 +460,9 @@ export function useApexVoice(options: {
     const callbacks = {
       status: (status: InputStatus) => {
         setInputStatus(status);
+        micOpenRef.current = status !== "off";
+        if (micOpenRef.current) holdMusic();
+        else if (stateRef.current !== "thinking" && stateRef.current !== "speaking") releaseMusic();
         if (status === "off" && stateRef.current === "listening") setVoiceState("idle");
         if (status === "listening" && stateRef.current === "idle") setVoiceState("listening");
       },
@@ -503,7 +509,7 @@ export function useApexVoice(options: {
       playMusic();
       stopReveal(); cancelSpeech();
     };
-  }, [stopReveal, setVoiceState, resumeListening]);
+  }, [stopReveal, setVoiceState, resumeListening, holdMusic, releaseMusic]);
 
   return {
     messages,

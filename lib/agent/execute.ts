@@ -16,13 +16,13 @@ export async function runPendingAction(action: PendingAction): Promise<string> {
     }
     switch (action.kind) {
       case "facebook_post":
-        result = await meta.publishFacebookPost(action.payload as { message: string; link?: string });
+        result = await meta.publishFacebookPost(action.payload as { message: string; link?: string; imageUrl?: string });
         break;
       case "instagram_post":
         result = await meta.publishInstagramPost(action.payload as { imageUrl: string; caption: string });
         break;
       case "tweet":
-        result = await x.publishTweet(action.payload as { text: string });
+        result = await x.publishTweet(action.payload as { text: string; imageUrl?: string });
         break;
       case "tiktok_post":
         result = await tiktok.publishTiktokVideo(action.payload as { videoUrl: string; caption: string });

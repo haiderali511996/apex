@@ -97,9 +97,14 @@ export async function getInstagramReport(): Promise<Report> {
 }
 
 /** Executes an already-approved Facebook Page post. Never call directly from a tool — always go through a pending action confirmed by the user. */
-export async function publishFacebookPost(payload: { message: string; link?: string }): Promise<string> {
+export async function publishFacebookPost(payload: { message: string; link?: string; imageUrl?: string }): Promise<string> {
   const pageId = cred("META_PAGE_ID")!;
   const token = cred("META_PAGE_ACCESS_TOKEN")!;
+  // With a picture it's a photo post: Facebook fetches the image from its link.
+  if (payload.imageUrl) {
+    const photo = await graphPost(`${pageId}/photos`, { url: payload.imageUrl, caption: payload.message, access_token: token });
+    return `Posted to Facebook with the picture: https://facebook.com/${photo.post_id ?? photo.id}`;
+  }
   const body: Record<string, string> = { message: payload.message, access_token: token };
   if (payload.link) body.link = payload.link;
   const res = await graphPost(`${pageId}/feed`, body);

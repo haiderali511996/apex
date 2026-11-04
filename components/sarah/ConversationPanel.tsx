@@ -70,6 +70,10 @@ export default function ConversationPanel({ voice, greeting, actions }: {
           <div key={action.id} className="sarah-approval">
             <span className="sarah-label">Needs your approval</span>
             <p>{action.summary}</p>
+            {typeof action.payload?.imageUrl === "string" && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={action.payload.imageUrl} alt="The picture this post will carry" style={{ width: "100%", maxWidth: 260, borderRadius: 10, marginTop: 8, display: "block" }} />
+            )}
             {action.status === "pending" ? (
               <div className="sarah-approval-btns">
                 <button type="button" className="sarah-btn is-primary" onClick={() => voice.respondToAction(action.id, true)}><Check size={13} /> Approve</button>

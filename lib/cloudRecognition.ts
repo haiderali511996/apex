@@ -30,9 +30,9 @@ const END_SILENCE_MS = 1200;
 /** Audio kept from just before the voice was detected. */
 const PRE_ROLL_MS = 400;
 /** Sustained voice needed to count as speech rather than a click or a cough. */
-const START_MS = 120;
+const START_MS = 180;
 /** A turn with less voice than this is noise and isn't sent. */
-const MIN_VOICE_MS = 300;
+const MIN_VOICE_MS = 450;
 const MAX_TURN_MS = 45_000;
 
 type AudioCtor = typeof AudioContext;
