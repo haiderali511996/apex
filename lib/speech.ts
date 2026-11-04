@@ -18,7 +18,7 @@
  */
 
 import { updateSpeechMotion, resetSpeechMotion } from "./speechMotion";
-import { speakNeural, cancelNeuralSpeech, neuralVoiceRuledOut, neuralVoiceReason } from "./neuralVoice";
+import { speakNeural, cancelNeuralSpeech, neuralVoiceRuledOut, neuralVoiceReason, neuralVoiceWorked } from "./neuralVoice";
 
 // (3) — a module-level reference keeps the utterance alive while it speaks.
 let active: SpeechSynthesisUtterance | null = null;
@@ -102,6 +102,10 @@ export function speakText(
   const version = speechVersion;
   if (neuralVoiceRuledOut()) {
     const reason = neuralVoiceReason();
+    if (neuralVoiceWorked()) {
+      handlers.onError?.(reason || "The voice service stopped working.");
+      return;
+    }
     if (reason) handlers.onWarning?.(`${reason} Using the system voice for this reply.`);
     speakViaSynth(text, voice, handlers);
     return;
@@ -114,6 +118,12 @@ export function speakText(
     // voice didn't run — "check your volume" sends the user hunting for a
     // problem that isn't there.
     const why = neuralVoiceReason();
+    // Once Sarah's own voice has been heard, never switch to a different-
+    // sounding system voice: show the reply as text instead.
+    if (neuralVoiceWorked()) {
+      handlers.onError?.(why || "The voice couldn't play this reply.");
+      return;
+    }
     if (why) handlers.onWarning?.(`${why} Using the system voice for this reply.`);
     speakViaSynth(text, voice, {
       ...handlers,

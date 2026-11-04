@@ -13,6 +13,8 @@
 
 import { updateSpeechMotion, resetSpeechMotion, speechAudioLevel, updateAudioSpeechMotion } from "./speechMotion";
 import type { SpeakHandlers } from "./speech";
+import { voiceElement, releaseVoiceElement } from "./audioUnlock";
+import { speechLang, type SpeechLang } from "./speechLanguage";
 
 type Alignment = {
   characters: string[];
@@ -44,6 +46,12 @@ export function neuralVoiceReason(): string {
   return unavailableReason;
 }
 
+/** True once the neural voice has spoken in this visit: from then on it is Sarah's voice. */
+export function neuralVoiceWorked(): boolean {
+  return everWorked;
+}
+let everWorked = false;
+
 let audio: HTMLAudioElement | null = null;
 let objectUrl: string | null = null;
 let frame = 0;
@@ -59,8 +67,7 @@ export function cancelNeuralSpeech() {
   abort?.abort();
   abort = null;
   if (audio) {
-    audio.pause();
-    audio.src = "";
+    releaseVoiceElement(audio);
     audio = null;
   }
   if (objectUrl) {
@@ -125,14 +132,14 @@ export function speechPieces(text: string): Piece[] {
 
 type Fetched = TtsResponse | { failed: string } | "canceled";
 
-async function fetchPiece(text: string, controller: AbortController): Promise<Fetched> {
+async function fetchPiece(text: string, lang: SpeechLang, controller: AbortController): Promise<Fetched> {
   // Later pieces are voiced while earlier ones play, so they can take longer.
   const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(30_000)]);
   try {
     const res = await fetch("/api/tts", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text: text.trim() }),
+      body: JSON.stringify({ text: text.trim(), lang }),
       signal,
     });
     if (controller !== abort) return "canceled";
@@ -164,13 +171,18 @@ export async function speakNeural(text: string, handlers: SpeakHandlers): Promis
   const controller = new AbortController();
   abort = controller;
   const pieces = speechPieces(text);
+  // One voice for the whole reply, never one per piece.
+  const lang = speechLang(text);
   // Two pieces are voiced at a time, the next starting as one finishes, so the
   // first is heard after its own wait only. More at once slowed every request
   // on the free tiers, sometimes past the timeout.
   const requests: (Promise<Fetched> | undefined)[] = [];
   const request = (i: number): Promise<Fetched> | undefined => {
     if (i >= pieces.length || requests[i]) return requests[i];
-    const pending = fetchPiece(pieces[i].text, controller);
+    // A piece that fails is asked for once more before giving up, so a single
+    // slow request doesn't cut the reply short.
+    const pending = fetchPiece(pieces[i].text, lang, controller)
+      .then(r => typeof r === "object" && "failed" in r && available !== "no" ? fetchPiece(pieces[i].text, lang, controller) : r);
     requests[i] = pending;
     void pending.then(() => request(i + 2));
     return pending;
@@ -205,6 +217,9 @@ export async function speakNeural(text: string, handlers: SpeakHandlers): Promis
 function playPiece(payload: TtsResponse, piece: Piece, handlers: SpeakHandlers, first: boolean, last: boolean) {
   return new Promise<"done" | "failed" | "canceled">((resolve) => {
     let settled = false;
+    // The same element every time: phones only allow sound from an element
+    // first played inside a tap (see audioUnlock), and replies come later.
+    const el = voiceElement();
     let decoded: AudioBuffer | null = null;
     let decoder: AudioContext | null = null;
     const finish = (value: "done" | "failed" | "canceled") => {
@@ -218,10 +233,8 @@ function playPiece(payload: TtsResponse, piece: Piece, handlers: SpeakHandlers, 
       finishCanceled = null;
       if (frame) cancelAnimationFrame(frame);
       frame = 0;
-      if (audio) {
-        audio.onplaying = audio.onended = audio.onerror = null;
-        audio.pause();
-        audio.src = "";
+      if (audio === el) {
+        releaseVoiceElement(el);
         audio = null;
       }
       if (objectUrl) URL.revokeObjectURL(objectUrl);
@@ -254,7 +267,7 @@ function playPiece(payload: TtsResponse, piece: Piece, handlers: SpeakHandlers, 
       } catch { /* Timing estimates remain available when decoding is unsupported. */ }
     }
     objectUrl = URL.createObjectURL(blob);
-    const el = new Audio(objectUrl);
+    el.src = objectUrl;
     audio = el;
 
     // Timings are per piece; captions index the whole reply.
@@ -263,7 +276,7 @@ function playPiece(payload: TtsResponse, piece: Piece, handlers: SpeakHandlers, 
     const reveal = (cue: WordCue) => handlers.onBoundary?.(piece.offset + cue.charIndex, cue.charLength);
 
     const tick = () => {
-      if (audio !== el) return;
+      if (settled || audio !== el) return;
       const t = el.currentTime;
       if (!el.paused && !el.ended && !(el.readyState < 3)) {
         if (decoded) {
@@ -282,6 +295,7 @@ function playPiece(payload: TtsResponse, piece: Piece, handlers: SpeakHandlers, 
     };
 
     el.onplaying = () => {
+      everWorked = true;
       clearTimeout(startTimeout);
       if (frame) cancelAnimationFrame(frame);
       if (first) handlers.onStart?.(cues.length > 0);
@@ -310,7 +324,7 @@ function playPiece(payload: TtsResponse, piece: Piece, handlers: SpeakHandlers, 
       frame = 0;
       unavailableReason =
         (err as Error)?.name === "NotAllowedError"
-          ? "The browser blocked audio until you interact with the page — tap the orb once."
+          ? "The browser blocked audio until you tap the page — tap anywhere once, then try again."
           : "Audio playback failed to start.";
       finish("failed");
     });

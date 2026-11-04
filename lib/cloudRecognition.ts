@@ -1,3 +1,4 @@
+import { resumeOnGesture, forgetContext } from "./audioUnlock";
 import { matchWake, type InputMode, type InputStatus } from "./voiceRecognition";
 
 /**
@@ -57,7 +58,6 @@ export class CloudRecognition {
   private ctx: AudioContext | null = null;
   private processor: ScriptProcessorNode | null = null;
   private opening: Promise<boolean> | null = null;
-  private resumeOnGesture: (() => void) | null = null;
 
   // The turn being spoken.
   private preRoll: Int16Array[] = [];
@@ -133,25 +133,14 @@ export class CloudRecognition {
     this.stream = stream; this.ctx = ctx; this.processor = processor;
     // Opened before any click, the audio clock starts suspended; the first
     // interaction with the page starts it.
-    if (ctx.state === "suspended") {
-      void ctx.resume().catch(() => {});
-      const resume = () => { void ctx.resume().catch(() => {}); this.dropGestureHook(); };
-      this.resumeOnGesture = resume;
-      window.addEventListener("pointerdown", resume);
-      window.addEventListener("keydown", resume);
-    }
+    // Phones also suspend it when the screen locks or a call comes in, so it
+    // stays registered: any later tap starts it again.
+    resumeOnGesture(ctx);
     return true;
   }
 
-  private dropGestureHook() {
-    if (!this.resumeOnGesture) return;
-    window.removeEventListener("pointerdown", this.resumeOnGesture);
-    window.removeEventListener("keydown", this.resumeOnGesture);
-    this.resumeOnGesture = null;
-  }
-
   private close() {
-    this.dropGestureHook();
+    if (this.ctx) forgetContext(this.ctx);
     if (this.processor) { this.processor.onaudioprocess = null; this.processor.disconnect(); }
     this.stream?.getTracks().forEach(t => t.stop());
     void this.ctx?.close().catch(() => {});

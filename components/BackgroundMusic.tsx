@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { MUSIC_COMMAND_EVENT, MUSIC_STATE_EVENT, type MusicCommand, type MusicState } from "@/lib/backgroundMusic";
+import { installAudioUnlock, onGesture, resumeOnGesture } from "@/lib/audioUnlock";
 
 // Unique tracks from /public (the "(1)" copies are byte-identical duplicates, so they are skipped).
 const DEFAULT_TRACKS = [
@@ -21,6 +22,29 @@ const DEFAULT_TRACKS = [
 const VOLUME = 0.12; // soft, so it sits under Sarah's voice
 const STORAGE_KEY = "sarah.music.enabled";
 
+type AudioCtor = typeof AudioContext;
+
+/**
+ * iPhones and iPads ignore `audio.volume` (it always reads back as 1), so the
+ * music would drown out Sarah. There the element is routed through a Web Audio
+ * gain instead. Must run inside a tap, so the audio clock starts running.
+ */
+function softenOnIOS(audio: HTMLAudioElement, state: { routed: boolean }) {
+  if (state.routed || Math.abs(audio.volume - VOLUME) < 0.01) return;
+  const w = window as unknown as { AudioContext?: AudioCtor; webkitAudioContext?: AudioCtor };
+  const Ctor = w.AudioContext || w.webkitAudioContext;
+  if (!Ctor) return;
+  try {
+    const ctx = new Ctor();
+    const gain = ctx.createGain();
+    gain.gain.value = VOLUME;
+    ctx.createMediaElementSource(audio).connect(gain);
+    gain.connect(ctx.destination);
+    state.routed = true;
+    resumeOnGesture(ctx);
+  } catch { /* stays at full volume rather than silent */ }
+}
+
 export default function BackgroundMusic() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const indexRef = useRef(0);
@@ -36,6 +60,8 @@ export default function BackgroundMusic() {
 
   // Waiting for the visitor's first click/tap/key before sound is allowed.
   const [blocked, setBlocked] = useState(false);
+
+  const routeRef = useRef({ routed: false });
 
   const start = useCallback(() => {
     const audio = audioRef.current;
@@ -56,9 +82,11 @@ export default function BackgroundMusic() {
     setEnabled(on);
 
     indexRef.current = Math.floor(Math.random() * DEFAULT_TRACKS.length);
+    installAudioUnlock();
     const audio = new Audio(DEFAULT_TRACKS[indexRef.current]);
     audio.volume = VOLUME;
     audio.preload = "auto";
+    audio.setAttribute("playsinline", "");
     audio.addEventListener("ended", () => {
       indexRef.current = (indexRef.current + 1) % tracksRef.current.length;
       audio.src = tracksRef.current[indexRef.current];
@@ -66,17 +94,19 @@ export default function BackgroundMusic() {
     });
     audioRef.current = audio;
 
-    // Browsers block sound until the user interacts, so unmute on the first gesture.
-    const GESTURES = ["pointerdown", "pointerup", "touchend", "click", "keydown"] as const;
-    const onGesture = () => {
-      if (enabledRef.current && !suspendedRef.current) start();
-      GESTURES.forEach(g => window.removeEventListener(g, onGesture, true));
-    };
+    // Browsers block sound until the user taps, so unmute on a tap. Keep
+    // listening until it actually plays out loud: on phones some touches
+    // (a scroll, a press that isn't a tap) don't count.
+    const stopListening = onGesture(() => {
+      if (!enabledRef.current || suspendedRef.current) return;
+      softenOnIOS(audio, routeRef.current);
+      if (!audio.paused && !audio.muted) { stopListening(); return; }
+      start();
+    });
     if (on) start();
-    GESTURES.forEach(g => window.addEventListener(g, onGesture, true));
 
     return () => {
-      GESTURES.forEach(g => window.removeEventListener(g, onGesture, true));
+      stopListening();
       audio.pause();
       audioRef.current = null;
     };
@@ -156,6 +186,7 @@ export default function BackgroundMusic() {
     } else {
       setEnabled(true);
       localStorage.setItem(STORAGE_KEY, "on");
+      softenOnIOS(audio, routeRef.current);
       start();
     }
   };

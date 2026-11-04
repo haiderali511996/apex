@@ -130,12 +130,12 @@ export async function POST(req: NextRequest) {
   const limit = voiceLimitReached(guard.user);
   if (limit) return NextResponse.json({ error: limit }, { status: 429 });
   if (process.env.IMEX_VOICE_PROVIDER === "fish") {
-    const { text } = await req.json() as { text?: unknown };
+    const { text, lang } = await req.json() as { text?: unknown; lang?: unknown };
     if (typeof text !== "string" || !text.trim()) return NextResponse.json({ error: "text is required" }, { status: 400 });
     if (text.length > 4000) return NextResponse.json({ error: "Speech text is too long." }, { status: 413 });
     if (!cred("FISH_AUDIO_API_KEY")?.trim()) return NextResponse.json({ error: "FISH_AUDIO_API_KEY is not set." }, { status: 503 });
     try {
-      const speech = await generateFishSpeech(text, req.signal, guard.persona.voice);
+      const speech = await generateFishSpeech(text, req.signal, guard.persona.voice, lang === "ur" || lang === "en" ? lang : undefined);
       addVoiceSeconds(guard.user, spokenSeconds(text));
       return NextResponse.json(speech);
     } catch (error) {
