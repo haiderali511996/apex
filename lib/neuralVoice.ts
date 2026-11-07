@@ -104,37 +104,65 @@ function base64ToBlob(base64: string, mimeType: string): Blob {
 
 type Piece = { text: string; offset: number };
 
+/** Longest piece voiced in one request: longer ones took past the timeout and the reply stopped. */
+const MAX_PIECE = 350;
+/**
+ * The first piece is all that's waited for before Sarah is heard, and voicing
+ * takes about a second per 40 characters, so it is one short clause.
+ */
+const FIRST_PIECE = 80;
+
 /**
  * A reply split for speaking: the first sentence alone, so audio starts as
- * soon as that one sentence is voiced, then the next few, then the rest,
- * each voiced while the one before it plays.
- * Voicing a whole reply first took 8–10 s before anything was heard. Three
- * pieces at most, because each one is a separate request. Exported for tests.
+ * soon as that one sentence is voiced, then short groups of sentences, each
+ * voiced while the one before it plays, however long the reply. A sentence
+ * too long for one piece is split at a comma or a space. Exported for tests.
  */
 export function speechPieces(text: string): Piece[] {
-  const sentences = [...text.matchAll(/[^.!?\u06D4\u061F\n]+(?:[.!?\u06D4\u061F]+|\n+|$)\s*/g)]
-    .map(m => ({ text: m[0], offset: m.index ?? 0 }));
+  const sentences: Piece[] = [];
+  for (const m of text.matchAll(/[^.!?\u06D4\u061F\n]+(?:[.!?\u06D4\u061F]+|\n+|$)\s*/g)) {
+    let part = m[0], offset = m.index ?? 0;
+    while (part.length > MAX_PIECE) {
+      const window = part.slice(0, MAX_PIECE);
+      let cut = Math.max(window.lastIndexOf(", "), window.lastIndexOf("\u060C "), window.lastIndexOf("; "));
+      if (cut < MAX_PIECE / 3) cut = window.lastIndexOf(" ");
+      cut = cut < MAX_PIECE / 3 ? MAX_PIECE : cut + 1;
+      sentences.push({ text: part.slice(0, cut), offset });
+      part = part.slice(cut); offset += cut;
+    }
+    if (part) sentences.push({ text: part, offset });
+  }
+  // A long first sentence is cut at its first pause (a comma), so the voice starts sooner.
+  const first = sentences[0];
+  if (first && first.text.length > FIRST_PIECE) {
+    const m = /[,;:\u060C]\s/.exec(first.text.slice(20, FIRST_PIECE));
+    if (m) {
+      const cut = 20 + m.index + m[0].length;
+      sentences.splice(0, 1, { text: first.text.slice(0, cut), offset: first.offset }, { text: first.text.slice(cut), offset: first.offset + cut });
+    }
+  }
   if (sentences.length <= 1) return [{ text, offset: 0 }];
   const pieces: Piece[] = [];
   let at = 0;
-  const take = (minLength: number) => {
+  const take = (minLength: number, max: number) => {
     const start = sentences[at];
     let piece = "";
-    while (at < sentences.length && (piece.length < minLength || !piece)) piece += sentences[at++].text;
+    while (at < sentences.length && (!piece || (piece.length < minLength && piece.length + sentences[at].text.length <= max))) piece += sentences[at++].text;
     pieces.push({ text: piece, offset: start.offset });
   };
-  // A very short opener ("Sure!") is joined to the next sentence.
-  take(25);
-  if (at < sentences.length) take(160);
-  if (at < sentences.length) take(Infinity);
-  return pieces;
+  // A very short opener ("Sure!") is joined to the next sentence if that stays short.
+  take(25, FIRST_PIECE);
+  // The second is voiced while the first plays, so it stays short too.
+  if (at < sentences.length) take(140, 200);
+  while (at < sentences.length) take(MAX_PIECE, MAX_PIECE);
+  return pieces.filter(p => p.text.trim());
 }
 
 type Fetched = TtsResponse | { failed: string } | "canceled";
 
 async function fetchPiece(text: string, lang: SpeechLang, controller: AbortController): Promise<Fetched> {
   // Later pieces are voiced while earlier ones play, so they can take longer.
-  const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(30_000)]);
+  const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(45_000)]);
   try {
     const res = await fetch("/api/tts", {
       method: "POST",
@@ -179,10 +207,10 @@ export async function speakNeural(text: string, handlers: SpeakHandlers): Promis
   const requests: (Promise<Fetched> | undefined)[] = [];
   const request = (i: number): Promise<Fetched> | undefined => {
     if (i >= pieces.length || requests[i]) return requests[i];
-    // A piece that fails is asked for once more before giving up, so a single
+    // A piece that fails is asked for twice more before giving up, so a single
     // slow request doesn't cut the reply short.
-    const pending = fetchPiece(pieces[i].text, lang, controller)
-      .then(r => typeof r === "object" && "failed" in r && available !== "no" ? fetchPiece(pieces[i].text, lang, controller) : r);
+    const retry = (r: Fetched) => typeof r === "object" && "failed" in r && available !== "no" ? fetchPiece(pieces[i].text, lang, controller) : r;
+    const pending = fetchPiece(pieces[i].text, lang, controller).then(retry).then(retry);
     requests[i] = pending;
     void pending.then(() => request(i + 2));
     return pending;
@@ -195,19 +223,22 @@ export async function speakNeural(text: string, handlers: SpeakHandlers): Promis
     if (result === "canceled" || controller !== abort) return true;
     if ("failed" in result) {
       unavailableReason = result.failed;
-      if (!started) return false;
-      // Part of the reply was spoken; stop there rather than switch voices mid-reply.
-      handlers.onEnd?.();
-      return true;
+      if (!started && i === 0) return false;
+      // Part of the reply was spoken: skip this piece and go on in the same
+      // voice, rather than stop or switch voices mid-reply.
+      if (i === pieces.length - 1) handlers.onEnd?.();
+      continue;
     }
     available = "yes";
     unavailableReason = "";
     const outcome = await playPiece(result, pieces[i], handlers, i === 0, i === pieces.length - 1);
     if (outcome === "canceled") return true;
     if (outcome === "failed") {
-      if (!started) return false;
-      handlers.onEnd?.();
-      return true;
+      if (!started && i === 0) return false;
+      // Sound is blocked until a tap: the rest would be blocked too.
+      if (/blocked/i.test(unavailableReason)) { handlers.onEnd?.(); return true; }
+      if (i === pieces.length - 1) handlers.onEnd?.();
+      continue;
     }
     started = true;
   }

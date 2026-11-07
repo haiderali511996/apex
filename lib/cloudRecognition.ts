@@ -26,7 +26,7 @@ type Callbacks = {
 
 const RATE = 16000;
 /** Quiet this long after speaking ends the turn; short pauses to think don't. */
-const END_SILENCE_MS = 1200;
+const END_SILENCE_MS = 850;
 /** Audio kept from just before the voice was detected. */
 const PRE_ROLL_MS = 400;
 /** Sustained voice needed to count as speech rather than a click or a cough. */
@@ -34,6 +34,20 @@ const START_MS = 180;
 /** A turn with less voice than this is noise and isn't sent. */
 const MIN_VOICE_MS = 450;
 const MAX_TURN_MS = 45_000;
+/**
+ * Only the person at the microphone counts. Their voice, close to the mic, is
+ * far louder than people talking nearby (twice the distance is about a
+ * quarter of the level), so the level of turns that turned out to be real
+ * requests is learned per device, and a turn much quieter than that is
+ * someone else's conversation and isn't sent.
+ */
+const LEVEL_KEY = "sarah.voiceLevel";
+/** A turn's voice must reach this share of the user's usual level. */
+const NEAR_SHARE = 0.45;
+/** Speech starts only above this share, so distant chatter doesn't open a turn. */
+const START_SHARE = 0.3;
+/** Turns heard before the level is trusted. */
+const LEARN_TURNS = 2;
 
 type AudioCtor = typeof AudioContext;
 
@@ -69,8 +83,30 @@ export class CloudRecognition {
   private turnMs = 0;
   private noise = 0.004;
   private sending = false;
+  private levelSum = 0;
+  private peak = 0;
+  // The user's own voice level at this device, and how many turns it's from.
+  private userLevel = 0;
+  private userTurns = 0;
+  private dropped = 0;
 
-  constructor(private callbacks: Callbacks) {}
+  constructor(private callbacks: Callbacks) {
+    try {
+      const saved = JSON.parse(localStorage.getItem(LEVEL_KEY) || "null") as { level?: number; turns?: number } | null;
+      if (saved && typeof saved.level === "number" && saved.level > 0) { this.userLevel = saved.level; this.userTurns = saved.turns ?? LEARN_TURNS; }
+    } catch { /* storage blocked: learn again this session */ }
+  }
+
+  private get learned() { return this.userTurns >= LEARN_TURNS && this.userLevel > 0; }
+
+  /** A turn that was a real request: its level is the user's voice. */
+  private learnLevel(level: number) {
+    if (!(level > 0)) return;
+    this.userLevel = this.userTurns ? this.userLevel * 0.7 + level * 0.3 : level;
+    this.userTurns++;
+    this.dropped = 0;
+    try { localStorage.setItem(LEVEL_KEY, JSON.stringify({ level: this.userLevel, turns: this.userTurns })); } catch { /* fine */ }
+  }
 
   setMode(mode: InputMode | null) {
     if (this.disposed) return;
@@ -102,6 +138,7 @@ export class CloudRecognition {
     this.preRoll = []; this.chunks = [];
     this.speaking = false;
     this.voicedRun = this.voicedTotal = this.silentRun = this.turnMs = 0;
+    this.levelSum = this.peak = 0;
   }
 
   private open(): Promise<boolean> {
@@ -114,7 +151,9 @@ export class CloudRecognition {
     let stream: MediaStream;
     try {
       // Echo cancellation keeps Sarah's own voice out of the next turn.
-      stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+      // Automatic gain is off: it boosts faint voices across the room up to the
+      // level of the person at the mic, and that difference is how they're told apart.
+      stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: false, channelCount: 1 } });
     } catch (err) {
       this.fail((err as Error)?.name === "NotAllowedError"
         ? "Microphone access is blocked. Allow the microphone for this site, then press the mic button."
@@ -169,10 +208,13 @@ export class CloudRecognition {
     const level = Math.sqrt(sum / input.length);
     const ms = (input.length / sampleRate) * 1000;
     // Voice is well above the room's own level, which is tracked while quiet.
-    const loud = level > Math.max(0.012, this.noise * 3);
+    const floor = Math.max(0.008, this.noise * 3);
+    const loud = level > floor;
+    // A turn opens only for a voice near the user's own level.
+    const near = level > Math.max(floor, this.learned ? this.userLevel * START_SHARE : 0);
     if (!this.speaking && !loud) this.noise = Math.max(0.002, this.noise * 0.95 + level * 0.05);
 
-    if (loud) { this.voicedRun += ms; this.silentRun = 0; } else { this.voicedRun = 0; if (this.speaking) this.silentRun += ms; }
+    if (loud && (this.speaking || near)) { this.voicedRun += ms; this.silentRun = 0; } else { this.voicedRun = 0; if (this.speaking) this.silentRun += ms; }
 
     if (!this.speaking) {
       this.preRoll.push(pcm);
@@ -183,26 +225,35 @@ export class CloudRecognition {
       this.chunks = this.preRoll; this.preRoll = [];
       this.turnMs = this.chunks.length * ms;
       this.voicedTotal = this.voicedRun;
+      this.levelSum = level * this.voicedRun;
+      this.peak = level;
       return;
     }
     this.chunks.push(pcm);
     this.turnMs += ms;
-    if (loud) this.voicedTotal += ms;
+    if (loud) { this.voicedTotal += ms; this.levelSum += level * ms; this.peak = Math.max(this.peak, level); }
     if (this.silentRun >= END_SILENCE_MS || this.turnMs >= MAX_TURN_MS) this.endTurn();
   }
 
   private endTurn() {
     const chunks = this.chunks, voiced = this.voicedTotal;
+    const level = voiced ? this.levelSum / voiced : 0;
     this.resetTurn();
     if (voiced < MIN_VOICE_MS) return;
+    if (this.learned && level < this.userLevel * NEAR_SHARE) {
+      // Someone further away. If several turns in a row fall short but are
+      // still fairly close, the user has probably moved back from the mic.
+      if (level >= this.userLevel * START_SHARE && ++this.dropped >= 4) { this.userLevel *= 0.8; this.dropped = 0; }
+      return;
+    }
     const length = chunks.reduce((n, c) => n + c.length, 0);
     const pcm = new Int16Array(length);
     let at = 0;
     for (const c of chunks) { pcm.set(c, at); at += c.length; }
-    void this.transcribe(pcm);
+    void this.transcribe(pcm, level);
   }
 
-  private async transcribe(pcm: Int16Array) {
+  private async transcribe(pcm: Int16Array, level: number) {
     const generation = this.generation, mode = this.mode;
     this.sending = true;
     this.callbacks.interim("…");
@@ -230,6 +281,8 @@ export class CloudRecognition {
     const command = mode === "wake" ? matchWake(text) : matchWake(text) ?? text;
     // Without the wake phrase there is nothing to act on; keep listening.
     if (command === null) { this.callbacks.interim(""); return; }
+    // Said to Sarah, so this is the user's voice level.
+    this.learnLevel(level);
     this.callbacks.interim(text);
     // A bare "Hey Sarah" opens direct listening for the request that follows.
     if (!command) { this.setMode("command"); return; }
