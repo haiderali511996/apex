@@ -78,17 +78,6 @@ export const GROUPS: Group[] = [
     fields: [{ key: "STRIPE_SECRET_KEY", label: "Restricted key", secret: true, placeholder: "rk_live_…" }],
   },
   {
-    id: "email", title: "Email (any provider)",
-    why: "Lets your assistant read, search and draft replies in your inbox: any provider in the world: Gmail, Outlook, Yahoo, iCloud, Zoho, AWS WorkMail, your web host, or your company's mail server. It never sends anything until you approve the draft. Use an app password where your provider offers one (Gmail, Yahoo, iCloud, Outlook and WorkMail with two-step sign-in require it), and make sure IMAP is switched on in your mailbox settings. The servers are found automatically; fill them in only if the test says so.",
-    link: { href: "/docs#email", text: "How to get an app password" },
-    fields: [
-      { key: "EMAIL_ADDRESS", label: "Email address", secret: false, placeholder: "you@yourcompany.com" },
-      { key: "EMAIL_PASSWORD", label: "Password or app password", secret: true },
-      { key: "EMAIL_IMAP_HOST", label: "Incoming (IMAP) server", secret: false, optional: true, placeholder: "found automatically, e.g. imap.example.com:993" },
-      { key: "EMAIL_SMTP_HOST", label: "Outgoing (SMTP) server", secret: false, optional: true, placeholder: "found automatically, e.g. smtp.example.com:465" },
-    ],
-  },
-  {
     id: "paypal", title: "PayPal (Finance agent)",
     why: "Lets the Finance agent read your PayPal balance, money in and out, and fees. Read-only — it can't send money. Create a REST app, switch on \"Transaction search\", and copy its Live client ID and secret.",
     link: { href: "https://developer.paypal.com/dashboard/applications/live", text: "Open PayPal apps" },
@@ -107,7 +96,10 @@ export const GROUPS: Group[] = [
 ];
 
 /** Keys that also arrive by OAuth rather than being typed in. */
-const SYSTEM_KEYS = ["GOOGLE_REFRESH_TOKEN"];
+// EMAIL_ACCOUNTS is the list of connected inboxes (managed on the Connections
+// page's Email section); EMAIL_* are the first single-inbox version, kept so
+// they can be read and then cleared.
+const SYSTEM_KEYS = ["GOOGLE_REFRESH_TOKEN", "EMAIL_ACCOUNTS", "EMAIL_ADDRESS", "EMAIL_PASSWORD", "EMAIL_IMAP_HOST", "EMAIL_SMTP_HOST"];
 export const CREDENTIAL_KEYS = new Set([...GROUPS.flatMap(g => g.fields.map(f => f.key)), ...SYSTEM_KEYS]);
 
 // ── Encryption at rest ──

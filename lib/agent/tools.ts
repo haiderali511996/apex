@@ -134,7 +134,7 @@ export const toolDefinitions: Anthropic.Tool[] = [
       type: "object",
       properties: {
         maxResults: { type: "number", description: "How many messages. Default 10." },
-        account: { type: "string", enum: ["email", "gmail"], description: "Only one account: \"email\" (the connected inbox, any provider) or \"gmail\". Omit to check every connected account." },
+        account: { type: "string", description: "Only one inbox: its address (or a unique part, e.g. \"info\"), or \"gmail\" for Gmail via Google sign-in. Omit to check every connected inbox." },
       },
     },
   },
@@ -146,7 +146,7 @@ export const toolDefinitions: Anthropic.Tool[] = [
       properties: {
         query: { type: "string", description: "e.g. 'from:client@x.com newer_than:7d invoice'." },
         maxResults: { type: "number" },
-        account: { type: "string", enum: ["email", "gmail"], description: "Omit to search every connected account." },
+        account: { type: "string", description: "One inbox's address (or a unique part), or \"gmail\". Omit to search every connected inbox." },
       },
       required: ["query"],
     },
@@ -154,7 +154,7 @@ export const toolDefinitions: Anthropic.Tool[] = [
   {
     name: "read_email",
     description: "Read one whole message from the connected inbox (any provider) by the id shown in get_inbox or search_email: full text, recipients, attachments' names. Use before replying, summarising or acting on an email.",
-    input_schema: { type: "object", properties: { id: { type: "number", description: "The message id from the list." } }, required: ["id"] },
+    input_schema: { type: "object", properties: { id: { type: "number", description: "The message id from the list." }, account: { type: "string", description: "The inbox the id came from (its address). Needed when several inboxes are connected." } }, required: ["id"] },
   },
   {
     name: "propose_email",
@@ -165,7 +165,7 @@ export const toolDefinitions: Anthropic.Tool[] = [
         to: { type: "string", description: "Recipient email address." },
         subject: { type: "string" },
         body: { type: "string", description: "Plain-text body." },
-        account: { type: "string", enum: ["email", "gmail"], description: "Which account sends it. Omit to use the connected inbox (any provider), or Gmail if that's the only one. When replying, send from the account the email came to." },
+        account: { type: "string", description: "Which inbox sends it: its address, or \"gmail\". When replying, use the inbox the email came to. Omit to use the first connected inbox." },
         in_reply_to: { type: "string", description: "When replying to a message from read_email: its Message-ID, so it threads." },
       },
       required: ["to", "subject", "body"],
@@ -652,33 +652,37 @@ export async function executeTool(name: string, input: Record<string, unknown>):
 
     case "get_inbox":
     case "search_email": {
-      const which = input.account as string | undefined;
-      const useBox = which !== "gmail" && mailbox.isConfigured();
-      const useGmail = which !== "email" && workspace.isConfigured();
-      if (!useBox && !useGmail) return { text: which === "gmail" ? "Gmail isn't connected: sign in with Google on the Connections page." : "No email is connected. Add any email account under Email on the Connections page (or sign in with Google for Gmail)." };
-      const max = (input.maxResults as number) || 10;
-      const parts: string[] = [];
-      if (useBox) parts.push(await (name === "get_inbox" ? mailbox.getInbox(max) : mailbox.searchMail(String(input.query ?? ""), max)).catch(err => `${mailbox.mailboxAddress()}: ${err instanceof Error ? err.message : err}`));
-      // Each account answers on its own: one failing (an expired Google sign-in) must not hide the other's mail.
-      if (useGmail) parts.push(await (name === "get_inbox" ? workspace.getInboxSummary(max) : workspace.searchEmail(String(input.query ?? ""), max))
-        .then(r => `Gmail: ${reportToText(r)}`)
-        .catch(err => `Gmail couldn't be checked: ${/invalid_grant/.test(String(err instanceof Error ? err.message : err)) ? "the Google sign-in has expired — sign in with Google again on the Connections page" : err instanceof Error ? err.message : err}. (Only Gmail is affected; other connected email still works.)`));
+      const which = (input.account as string | undefined)?.trim();
+      const onlyGmail = which?.toLowerCase() === "gmail";
+      const boxes = onlyGmail ? [] : which ? [mailbox.pickAccount(which)] : mailbox.listAccounts();
+      const useGmail = (!which || onlyGmail) && workspace.isConfigured();
+      if (!boxes.length && !useGmail) return { text: onlyGmail ? "Gmail isn't connected: sign in with Google on the Connections page." : "No email is connected. Add your inboxes under Email on the Connections page (any provider), or sign in with Google for Gmail." };
+      // Fewer messages each when several inboxes are checked at once.
+      const max = (input.maxResults as number) || (boxes.length > 2 ? 5 : 10);
+      const query = String(input.query ?? "");
+      // Every inbox answers on its own: one failing (a changed password, an expired sign-in) must not hide the others.
+      const parts = await Promise.all([
+        ...boxes.map(acct => (name === "get_inbox" ? mailbox.getInbox(acct, max) : mailbox.searchMail(acct, query, max)).catch(err => `${acct.address}: ${err instanceof Error ? err.message : err}`)),
+        ...(useGmail ? [(name === "get_inbox" ? workspace.getInboxSummary(max) : workspace.searchEmail(query, max))
+          .then(r => `Gmail: ${reportToText(r)}`)
+          .catch(err => `Gmail couldn't be checked: ${/invalid_grant/.test(String(err instanceof Error ? err.message : err)) ? "the Google sign-in has expired — sign in with Google again on the Connections page" : err instanceof Error ? err.message : err}. (Only Gmail is affected; the other inboxes still work.)`)] : []),
+      ]);
       return { text: parts.join("\n\n") };
     }
     case "read_email": {
-      if (!mailbox.isConfigured()) return { text: "Reading a whole message works with the inbox connected under Email on the Connections page." };
-      return { text: await mailbox.readMail(Number(input.id)) };
+      if (!mailbox.isConfigured()) return { text: "Reading a whole message works with the inboxes connected under Email on the Connections page." };
+      return { text: await mailbox.readMail(mailbox.pickAccount(input.account as string | undefined), Number(input.id)) };
     }
     case "propose_email": {
-      const viaBox = input.account === "email" || (input.account !== "gmail" && mailbox.isConfigured());
-      if (viaBox && !mailbox.isConfigured()) return { text: "No email account is connected. Add one under Email on the Connections page." };
-      if (!viaBox && !workspace.isConfigured()) return { text: "No email account is connected to send from. Add one under Email on the Connections page, or sign in with Google." };
-      const from = viaBox ? mailbox.mailboxAddress() : "Gmail";
+      const which = (input.account as string | undefined)?.trim();
+      const viaGmail = which?.toLowerCase() === "gmail" || (!which && !mailbox.isConfigured());
+      if (viaGmail && !workspace.isConfigured()) return { text: "No email account is connected to send from. Add one under Email on the Connections page, or sign in with Google." };
+      const from = viaGmail ? "Gmail" : mailbox.pickAccount(which).address;
       const action = await createPendingAction({
         platform: "email",
-        kind: viaBox ? "mailbox_send" : "send_email",
+        kind: viaGmail ? "send_email" : "mailbox_send",
         summary: `Email from ${from} to ${input.to} — "${input.subject}"\n\n${String(input.body).slice(0, 1500)}`,
-        payload: { to: input.to, subject: input.subject, body: input.body, ...(viaBox && input.in_reply_to ? { inReplyTo: input.in_reply_to } : {}) },
+        payload: { to: input.to, subject: input.subject, body: input.body, ...(viaGmail ? {} : { from, ...(input.in_reply_to ? { inReplyTo: input.in_reply_to } : {}) }) },
       });
       return { text: `Draft queued for your approval (id ${action.id}). Nothing has been sent yet.`, pendingAction: action };
     }

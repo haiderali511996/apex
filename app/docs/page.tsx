@@ -49,7 +49,7 @@ const STEPS: { id: string; title: string; body: React.ReactNode }[] = [
     body: <>
       <p>Your assistant can read, search and draft replies in any inbox: Gmail, Outlook, Yahoo, iCloud, Zoho, AWS WorkMail, your web host or your company&apos;s server. It uses the standard IMAP (reading) and SMTP (sending) that every provider offers, and never sends anything until you approve the draft.</p>
       <ol>
-        <li>On <Link href="/connections">Connections</Link>, under <b>Email (any provider)</b>, enter your email address and password, then press <b>Save</b>. The servers are found automatically and the connection is tested.</li>
+        <li>On <Link href="/connections">Connections</Link>, under <b>Email inboxes (any provider)</b>, enter an email address and its password, then press <b>Connect inbox</b>. The servers are found automatically and the login is tested before it's saved. Add as many inboxes as you like (support@, info@, sales@…), from any mix of providers.</li>
         <li>If the test says the login was refused, your provider needs an <b>app password</b> (a separate password just for apps):
           <ul>
             <li><b>Gmail / Google Workspace:</b> turn on 2-Step Verification, then create one at <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noreferrer">myaccount.google.com/apppasswords</a>.</li>
@@ -60,7 +60,7 @@ const STEPS: { id: string; title: string; body: React.ReactNode }[] = [
             <li><b>Outlook / Microsoft 365:</b> your administrator must allow IMAP and SMTP sign-in (&quot;authenticated SMTP&quot;) for the mailbox; use an app password if 2-step sign-in is on.</li>
           </ul>
         </li>
-        <li>If the test says the server wasn&apos;t found, type your provider&apos;s IMAP and SMTP servers in the two optional boxes, like <code>mail.example.com:993</code> and <code>mail.example.com:465</code>. Your host lists them under &quot;email client settings&quot;.</li>
+        <li>If the test says the server wasn&apos;t found, press <b>Enter servers manually</b> and type your provider&apos;s IMAP and SMTP servers, like <code>mail.example.com:993</code> and <code>mail.example.com:465</code>. Your host lists them under &quot;email client settings&quot;.</li>
         <li>Ask: &quot;What&apos;s new in my inbox?&quot;, &quot;Find the invoice from Ahmed last week&quot;, &quot;Reply to that saying I&apos;ll call tomorrow&quot;. Replies appear as drafts for you to approve.</li>
       </ol>
     </>,

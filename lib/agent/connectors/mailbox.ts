@@ -117,40 +117,61 @@ export async function findServers(address: string, imapHost?: string, smtpHost?:
   return servers;
 }
 
-// ---------- The account ----------
+// ---------- The accounts ----------
+
+/** One connected inbox. Stored encrypted as a list in EMAIL_ACCOUNTS. */
+export type MailAccount = { address: string; password: string; imap?: string; smtp?: string };
+
+/** Every inbox this account connected; the first single-inbox setup counts as one. */
+export function listAccounts(): MailAccount[] {
+  let list: MailAccount[] = [];
+  try { list = JSON.parse(cred("EMAIL_ACCOUNTS") || "[]"); } catch { list = []; }
+  const legacy = cred("EMAIL_ADDRESS")?.trim(), legacyPass = cred("EMAIL_PASSWORD");
+  if (legacy && legacyPass && !list.some(a => a.address.toLowerCase() === legacy.toLowerCase())) {
+    list.unshift({ address: legacy, password: legacyPass, imap: cred("EMAIL_IMAP_HOST") || undefined, smtp: cred("EMAIL_SMTP_HOST") || undefined });
+  }
+  return list.filter(a => a?.address && a?.password);
+}
 
 export function isConfigured() {
-  return !!(cred("EMAIL_ADDRESS")?.trim() && cred("EMAIL_PASSWORD"));
+  return listAccounts().length > 0;
 }
 
-function account() {
-  const address = cred("EMAIL_ADDRESS")?.trim();
-  const password = cred("EMAIL_PASSWORD");
-  if (!address || !password) throw new Error("No email account is connected. Add it under Email on the Connections page.");
-  return { address, password, servers: () => findServers(address, cred("EMAIL_IMAP_HOST"), cred("EMAIL_SMTP_HOST")) };
+export function addresses(): string[] {
+  return listAccounts().map(a => a.address);
 }
 
-export function mailboxAddress() {
-  return cred("EMAIL_ADDRESS")?.trim() || "";
+/** The inbox named (by address, or a unique part like "info"), or the only one. */
+export function pickAccount(wanted?: string): MailAccount {
+  const all = listAccounts();
+  if (!all.length) throw new Error("No email account is connected. Add one under Email on the Connections page.");
+  const w = wanted?.trim().toLowerCase();
+  if (!w) return all[0];
+  const exact = all.find(a => a.address.toLowerCase() === w);
+  if (exact) return exact;
+  const partial = all.filter(a => a.address.toLowerCase().includes(w));
+  if (partial.length === 1) return partial[0];
+  throw new Error(`"${wanted}" isn't one of the connected inboxes: ${all.map(a => a.address).join(", ")}.`);
 }
+
+const serversOf = (a: MailAccount) => findServers(a.address, a.imap, a.smtp);
 
 /** Login failures, in words someone can act on. */
-function explain(err: unknown, server: Server): Error {
+function explain(err: unknown, server: Server, address: string): Error {
   const e = err as { authenticationFailed?: boolean; responseText?: string; code?: string; message?: string };
   const text = `${e.responseText ?? ""} ${e.message ?? ""}`;
   if (e.authenticationFailed || /auth|login|credentials|password|535|534/i.test(text)) {
-    return new Error(`The email provider refused the login for ${mailboxAddress()}. Most providers (Gmail, Yahoo, iCloud, Outlook, Zoho, WorkMail with MFA) need an "app password" here, not your normal password, and IMAP switched on in the mailbox settings.`);
+    return new Error(`The email provider refused the login for ${address}. Most providers (Gmail, Yahoo, iCloud, Outlook, Zoho, WorkMail with MFA) need an "app password" here, not your normal password, and IMAP switched on in the mailbox settings.`);
   }
   if (/ENOTFOUND|EAI_AGAIN/.test(text) || e.code === "ENOTFOUND") return new Error(`The mail server ${server.host} doesn't exist. Type your provider's IMAP/SMTP server on the Connections page.`);
   if (/ETIMEDOUT|ECONNREFUSED|timeout/i.test(text)) return new Error(`Couldn't reach ${server.host}:${server.port}. Check the server and port on the Connections page.`);
-  return new Error(`Email error: ${(e.responseText || e.message || String(err)).slice(0, 200)}`);
+  return new Error(`Email error for ${address}: ${(e.responseText || e.message || String(err)).slice(0, 200)}`);
 }
 
-async function withInbox<T>(work: (client: ImapFlow) => Promise<T>, folder = "INBOX"): Promise<T> {
-  const { address, password, servers } = account();
-  const { imap: server } = await servers();
-  const client = new ImapFlow({ host: server.host, port: server.port, secure: server.secure, auth: { user: address, pass: password }, logger: false, connectionTimeout: 15_000, greetingTimeout: 15_000, socketTimeout: 60_000 });
-  try { await client.connect(); } catch (err) { throw explain(err, server); }
+async function withInbox<T>(acct: MailAccount, work: (client: ImapFlow) => Promise<T>, folder = "INBOX"): Promise<T> {
+  const { imap: server } = await serversOf(acct);
+  const client = new ImapFlow({ host: server.host, port: server.port, secure: server.secure, auth: { user: acct.address, pass: acct.password }, logger: false, connectionTimeout: 15_000, greetingTimeout: 15_000, socketTimeout: 60_000 });
+  try { await client.connect(); } catch (err) { throw explain(err, server, acct.address); }
   try {
     const lock = await client.getMailboxLock(folder);
     try { return await work(client); } finally { lock.release(); }
@@ -186,13 +207,13 @@ async function summarize(client: ImapFlow, uids: number[]): Promise<Summary[]> {
 const list = (items: Summary[]) => items.map(m => `• [id ${m.uid}] ${m.date} — ${m.from} — "${m.subject}"${m.unread ? " (unread)" : ""}${m.snippet ? `\n  ${m.snippet}` : ""}`).join("\n");
 
 /** Unread mail first; the latest messages if nothing is unread. Reading never marks anything as read. */
-export async function getInbox(max = 10): Promise<string> {
-  return withInbox(async client => {
+export async function getInbox(acct: MailAccount, max = 10): Promise<string> {
+  return withInbox(acct, async client => {
     const unread = (await client.search({ seen: false }, { uid: true })) || [];
     const uids = (unread.length ? unread : ((await client.search({ all: true }, { uid: true })) || [])).slice(-max);
     const items = await summarize(client, uids);
-    if (!items.length) return `${mailboxAddress()}: the inbox is empty.`;
-    return `${mailboxAddress()} — ${unread.length ? `${unread.length} unread, newest ${items.length}` : `no unread mail; latest ${items.length}`}:\n${list(items)}`;
+    if (!items.length) return `${acct.address}: the inbox is empty.`;
+    return `${acct.address} — ${unread.length ? `${unread.length} unread, newest ${items.length}` : `no unread mail; latest ${items.length}`}:\n${list(items)}`;
   });
 }
 
@@ -200,7 +221,7 @@ export async function getInbox(max = 10): Promise<string> {
  * Searches with simple words plus optional from:, to:, subject: and
  * newer_than:7d / older_than:30d, like Gmail's syntax, on any server.
  */
-export async function searchMail(query: string, max = 10): Promise<string> {
+export async function searchMail(acct: MailAccount, query: string, max = 10): Promise<string> {
   const criteria: Record<string, unknown> = {};
   let rest = query;
   rest = rest.replace(/\b(from|to|subject):("[^"]+"|\S+)/gi, (_, k: string, v: string) => { criteria[k.toLowerCase()] = v.replace(/"/g, ""); return ""; });
@@ -212,49 +233,60 @@ export async function searchMail(query: string, max = 10): Promise<string> {
   rest = rest.replace(/\bis:unread\b/gi, () => { criteria.seen = false; return ""; }).trim();
   if (rest) criteria.text = rest;
   if (!Object.keys(criteria).length) criteria.all = true;
-  return withInbox(async client => {
+  return withInbox(acct, async client => {
     const uids = ((await client.search(criteria, { uid: true })) || []).slice(-max);
     const items = await summarize(client, uids);
-    return items.length ? `${items.length} message(s) in ${mailboxAddress()} for "${query}":\n${list(items)}` : `Nothing in ${mailboxAddress()} matches "${query}".`;
+    return items.length ? `${items.length} message(s) in ${acct.address} for "${query}":\n${list(items)}` : `Nothing in ${acct.address} matches "${query}".`;
   });
 }
 
-/** One whole message by its id from the inbox list or a search. */
-export async function readMail(uid: number): Promise<string> {
-  return withInbox(async client => {
+/** One whole message by its id from that inbox's list or search. */
+export async function readMail(acct: MailAccount, uid: number): Promise<string> {
+  return withInbox(acct, async client => {
     const m = await client.fetchOne(String(uid), { uid: true, source: true }, { uid: true });
-    if (!m || !m.source) return `There's no message with id ${uid} in the inbox.`;
+    if (!m || !m.source) return `There's no message with id ${uid} in ${acct.address}.`;
     const p = await simpleParser(m.source);
     const attachments = p.attachments.map(a => `${a.filename ?? "attachment"} (${Math.round(a.size / 1024)} KB)`);
     const from = p.from?.text ?? "unknown";
-    return [`From: ${from}`, `To: ${(Array.isArray(p.to) ? p.to.map(t => t.text).join(", ") : p.to?.text) ?? ""}`, `Date: ${p.date?.toISOString().slice(0, 16).replace("T", " ") ?? ""}`, `Subject: ${p.subject ?? ""}`, p.messageId ? `Message-ID: ${p.messageId}` : "", attachments.length ? `Attachments: ${attachments.join(", ")}` : "", "", (p.text ?? "").trim().slice(0, 6000)].filter(l => l !== "").join("\n");
+    return [`Inbox: ${acct.address}`, `From: ${from}`, `To: ${(Array.isArray(p.to) ? p.to.map(t => t.text).join(", ") : p.to?.text) ?? ""}`, `Date: ${p.date?.toISOString().slice(0, 16).replace("T", " ") ?? ""}`, `Subject: ${p.subject ?? ""}`, p.messageId ? `Message-ID: ${p.messageId}` : "", attachments.length ? `Attachments: ${attachments.join(", ")}` : "", "", (p.text ?? "").trim().slice(0, 6000)].filter(l => l !== "").join("\n");
   });
 }
 
-/** Sends from the connected account. Only called for a draft the user approved. */
-export async function sendMail(payload: { to: string; subject: string; body: string; inReplyTo?: string }): Promise<string> {
-  const { address, password, servers } = account();
-  const { smtp: server } = await servers();
-  const mail = { from: address, to: payload.to, subject: payload.subject, text: payload.body, ...(payload.inReplyTo ? { inReplyTo: payload.inReplyTo, references: payload.inReplyTo } : {}) };
-  const transport = nodemailer.createTransport({ host: server.host, port: server.port, secure: server.secure, auth: { user: address, pass: password }, connectionTimeout: 15_000 });
-  try { await transport.sendMail(mail); } catch (err) { throw explain(err, server); }
+/** Sends from one connected inbox. Only called for a draft the user approved. */
+export async function sendMail(payload: { from?: string; to: string; subject: string; body: string; inReplyTo?: string }): Promise<string> {
+  const acct = pickAccount(payload.from);
+  const { smtp: server } = await serversOf(acct);
+  const mail = { from: acct.address, to: payload.to, subject: payload.subject, text: payload.body, ...(payload.inReplyTo ? { inReplyTo: payload.inReplyTo, references: payload.inReplyTo } : {}) };
+  const transport = nodemailer.createTransport({ host: server.host, port: server.port, secure: server.secure, auth: { user: acct.address, pass: acct.password }, connectionTimeout: 15_000 });
+  try { await transport.sendMail(mail); } catch (err) { throw explain(err, server, acct.address); }
   // Most providers file sent mail only when it's sent from their own app, so a copy goes into the Sent folder.
   try {
     const raw = await new MailComposer({ ...mail, date: new Date() }).compile().build();
-    await withInbox(async client => {
+    await withInbox(acct, async client => {
       const sent = (await client.list()).find(f => f.specialUse === "\\Sent");
       if (sent) await client.append(sent.path, raw, ["\\Seen"]);
     });
   } catch { /* the email itself was sent */ }
-  return `Sent from ${address} to ${payload.to}: "${payload.subject}".`;
+  return `Sent from ${acct.address} to ${payload.to}: "${payload.subject}".`;
 }
 
-/** Logs in to both servers, for the Test button on the Connections page. */
+/** Logs in to both servers; used before an inbox is saved, and by the Test button. */
+export async function testAccount(acct: MailAccount): Promise<string> {
+  const s = await serversOf(acct);
+  await withInbox(acct, async () => {});
+  const transport = nodemailer.createTransport({ host: s.smtp.host, port: s.smtp.port, secure: s.smtp.secure, auth: { user: acct.address, pass: acct.password }, connectionTimeout: 15_000 });
+  try { await transport.verify(); } catch (err) { throw explain(err, s.smtp, acct.address); }
+  return `Connected: ${acct.address} reads from ${s.imap.host}:${s.imap.port} and sends through ${s.smtp.host}:${s.smtp.port} (${s.how}).`;
+}
+
+/** Tests every connected inbox. */
 export async function testMailbox(): Promise<string> {
-  const { address, password, servers } = account();
-  const s = await servers();
-  await withInbox(async () => {});
-  const transport = nodemailer.createTransport({ host: s.smtp.host, port: s.smtp.port, secure: s.smtp.secure, auth: { user: address, pass: password }, connectionTimeout: 15_000 });
-  try { await transport.verify(); } catch (err) { throw explain(err, s.smtp); }
-  return `Connected: ${address} reads from ${s.imap.host}:${s.imap.port} and sends through ${s.smtp.host}:${s.smtp.port} (${s.how}).`;
+  const results = await Promise.all(listAccounts().map(a => testAccount(a).catch(err => `${a.address}: ${err instanceof Error ? err.message : err}`)));
+  return results.join("\n");
+}
+
+/** For the prompt, so the assistant knows which inboxes exist. */
+export function emailBrief(): string {
+  const all = addresses();
+  return all.length ? `\n\nConnected email inboxes: ${all.join(", ")}. get_inbox and search_email check all of them unless one is named; reply from the inbox the email came to.` : "";
 }

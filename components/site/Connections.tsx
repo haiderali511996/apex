@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import EmailAccounts from "./EmailAccounts";
 import { useCallback, useEffect, useState } from "react";
 import type { Group } from "@/lib/credentials";
 
@@ -33,7 +34,7 @@ export default function Connections() {
     if (!res.ok) return note(group.id, false, "Couldn't save. Try again.");
     setDrafts(d => { const next = { ...d }; for (const k of Object.keys(values)) delete next[k]; return next; });
     await load();
-    if (group.id === "gemini" || group.id === "fish" || group.id === "email") await test(group.id);
+    if (group.id === "gemini" || group.id === "fish") await test(group.id);
     else note(group.id, true, "Saved.");
   };
 
@@ -76,6 +77,7 @@ export default function Connections() {
       {google === "missing-client" && <p className="form-error">Save your Google OAuth client ID and secret first, then sign in.</p>}
 
       <div style={{ display: "grid", gap: 16 }}>
+        <EmailAccounts />
         {data.groups.map(group => (
           <section className="card" key={group.id} style={{ padding: 24 }}>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "baseline" }}>
@@ -102,7 +104,7 @@ export default function Connections() {
             )}
             <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginTop: 8 }}>
               <button type="button" className="btn btn-primary btn-small" disabled={busy === group.id} onClick={() => save(group)}>{busy === group.id ? "Saving…" : "Save"}</button>
-              {(group.id === "gemini" || group.id === "fish" || group.id === "email") && <button type="button" className="btn btn-ghost btn-small" disabled={busy === group.id} onClick={() => test(group.id)}>Test</button>}
+              {(group.id === "gemini" || group.id === "fish") && <button type="button" className="btn btn-ghost btn-small" disabled={busy === group.id} onClick={() => test(group.id)}>Test</button>}
               {group.id === "google" && (data.googleSignedIn
                 ? <><span className="form-ok" style={{ margin: 0 }}>Signed in with Google</span><button type="button" className="btn btn-ghost btn-small" onClick={disconnectGoogle}>Disconnect</button></>
                 : <a className="btn btn-ghost btn-small" href="/api/google/connect">Sign in with Google</a>)}
