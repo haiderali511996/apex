@@ -8,6 +8,7 @@ import { anthropicClient, MODEL } from "./anthropicClient";
 import { currentUserId } from "@/lib/credentials";
 import { engineFor } from "@/lib/agentEngines";
 import { claudeComputer, runOnDevice } from "@/lib/devices";
+import { readPhoto, type Photo } from "@/lib/photos";
 
 /**
  * A specialist set to Claude runs on the Claude Code on the user's computer
@@ -27,14 +28,17 @@ async function viaClaudeCode(userId: string, role: string, request: string, cont
  * what they're given, so anything needing live data is fetched by the main
  * agent first and passed in as context.
  */
-export async function askSpecialist(role: string, request: string, context?: string): Promise<string> {
+export async function askSpecialist(role: string, request: string, context?: string, photos: Photo[] = []): Promise<string> {
   const specialist = SPECIALISTS[role];
   if (!specialist) throw new Error(`Unknown specialist: ${role}`);
   const userId = currentUserId();
   let note = "";
+  // Claude on the computer gets the photos as links with Sarah's description;
+  // Gemini sees the photos themselves.
+  const photoNote = photos.length ? `\n\nThe user showed ${photos.length === 1 ? "a photo" : `${photos.length} photos`} of this (described in the context above); links: ${photos.map(p => p.url).join(" ")}` : "";
   if (userId && engineFor(userId, role) === "claude-code") {
     try {
-      return `(Answered by Claude)\n${await viaClaudeCode(userId, role, request, context)}`;
+      return `(Answered by Claude)\n${await viaClaudeCode(userId, role, request, (context ?? "") + photoNote)}`;
     } catch (err) {
       note = `(Claude wasn't reachable — ${err instanceof Error ? err.message : err} — so Gemini answered this one.)\n`;
     }
@@ -43,7 +47,10 @@ export async function askSpecialist(role: string, request: string, context?: str
     const search = SEARCHES.has(role);
     const response = await generateGemini(
       `You are Sarah's ${specialist.name} specialist. ${specialist.brief} Be concise. Advise and draft only; never claim to have acted.${search ? ` You can search the web: use it for anything current (prices, competitors, news, laws, statistics) and don't guess those. Today is ${new Date().toDateString()}.` : ""}`,
-      [{ role: "user", parts: [{ text: context ? `${request}\n\nContext: ${context}` : request }] }],
+      [{ role: "user", parts: [
+        ...(userId ? (await Promise.all(photos.map(p => readPhoto(userId, p.id)))).flatMap(b => b ? [{ inlineData: { mimeType: "image/jpeg", data: b.toString("base64") } }] : []) : []),
+        { text: (context ? `${request}\n\nContext: ${context}` : request) + (photos.length ? "\n\n(The attached photos are what the user showed.)" : "") },
+      ] }],
       undefined,
       { search }
     );

@@ -2,8 +2,10 @@ import { generateGemini, geminiText, type GeminiContent, type GeminiPart } from 
 import { toolDefinitions, executeTool } from "./tools";
 import type { ClientAction, PendingAction } from "./types";
 
-export async function runViaGemini(messages: { role: "user" | "assistant"; content: string }[], system: string, opts: { tools?: boolean; exclude?: (name: string) => boolean } = {}) {
-  const contents: GeminiContent[] = messages.map(m => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] }));
+export type AgentMessage = { role: "user" | "assistant"; content: string; images?: { mimeType: string; data: string }[] };
+
+export async function runViaGemini(messages: AgentMessage[], system: string, opts: { tools?: boolean; exclude?: (name: string) => boolean } = {}) {
+  const contents: GeminiContent[] = messages.map(m => ({ role: m.role === "assistant" ? "model" : "user", parts: [...(m.images ?? []).map(inlineData => ({ inlineData })), { text: m.content }] }));
   const pendingActions: PendingAction[] = [];
   const clientActions: ClientAction[] = [];
   // Without tools the model can only talk: used for accounts that haven't

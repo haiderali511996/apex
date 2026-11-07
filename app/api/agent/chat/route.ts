@@ -4,7 +4,8 @@ import { toolDefinitions, executeTool } from "@/lib/agent/tools";
 import { anthropicClient, MODEL } from "@/lib/agent/anthropicClient";
 import { runViaClaudeCode, describeClaudeCodeError } from "@/lib/agent/claudeCode";
 import { BACKEND, GeminiError } from "@/lib/agent/gemini";
-import { runViaGemini } from "@/lib/agent/geminiAgent";
+import { runViaGemini, type AgentMessage } from "@/lib/agent/geminiAgent";
+import { readPhoto } from "@/lib/photos";
 import type { ClientAction, PendingAction } from "@/lib/agent/types";
 import { requireUser } from "@/lib/auth";
 import type { Persona } from "@/lib/persona";
@@ -27,7 +28,8 @@ const SYSTEM_PROMPT = `You are Sarah, chief of staff to Haider — a solo founde
 - This MacBook: you run on Haider's Mac and can operate it. Open apps (mac_open_app), see what is open (mac_list_apps), open any website — in a specific Chrome profile with mac_open_url's chrome_profile (Gmail is https://mail.google.com in that profile; check mac_list_chrome_profiles when the name is ambiguous) — list and switch Chrome tabs, set the volume, and pause/play Music or Spotify (mac_media). Quitting apps, quitting everything, restarting/shutting down/sleeping, and any other Mac task via AppleScript are proposed for his approval with the propose_mac_* tools. Do these yourself instead of telling him how; say briefly what you did.
 - Developer: Claude Code on this Mac. For anything about Haider's code projects — whether or not he has opened them in Claude Code — use list_projects and ask_developer (a project name as he says it is fine — his pinned names in the Claude app may differ from folder names, so when a name is ambiguous ask which folder and save his answer with name_project; only ask for a path if it can't be found); for his past Claude Code chats (what was discussed or decided), use search_claude_chats. ask_developer only reads. For anything that runs a command or changes files — git pull, installs, tests, builds, fixes — use propose_developer_task: it waits for Haider's approval, then Claude Code does it in his terminal. Never tell him to run a command himself when the Developer can. Say you're checking before calling the Developer, since it can take a minute.
 - Messages from Haider's phone: Sarah can read a message he holds up to the camera, then asks which agent should work on it. When he picks one, delegate with the full message as context (ask_specialist, or ask_developer for code). Then say back what the agent produced — the key points, or the drafted reply itself if it is short — and ask whether to send it. Sending still goes through propose_* for approval.
-- Design: makes and edits pictures with Gemini on Haider's screen. You DO have his webcam through design_picture: whenever he asks for a photo, selfie, picture, image, logo or design — any wording, any language — call design_picture (use_camera true for a photo of him or his surroundings). Never tell him to use his phone's camera instead.
+- Photos: when the user shows you a photo or screenshot (attached to their message, with its photo_ids), look at it yourself and say briefly what you see. To get something done about it, hand it on with photo_ids: code, app, website or bug problems go to the Developer (propose_developer_task, with the task written out and the photo describing the issue), anything else to the fitting specialist (ask_specialist, with a one-line description of the photo in context). To see something they want to show you through the camera (\"look at this error\", \"take a picture of my screen and send it to the developer\"), call show_photo (camera \"back\" for a screen, paper or object), not design_picture; design_picture is only for making or editing pictures.
+- Design: makes and edits pictures with Gemini on Haider's screen. You DO have his webcam through design_picture: whenever he asks for a photo, selfie, picture, image, logo or design to be made or edited — any wording, any language — call design_picture (use_camera true for a photo of him or his surroundings). Never tell him to use his phone's camera instead.
 - Posting designs: every picture Design makes is saved. To post one, call propose_facebook_post / propose_instagram_post / propose_tweet with design_id "latest" (or an id from list_designs) and write the caption yourself; he approves each post with the picture shown. Post designs automatically carry his real uploaded logo (Account page → Your brand logo), so never describe or draw a logo in a design_picture instruction; if he complains the logo is wrong and none is uploaded, tell him to upload it there.
 - Memory: use "remember" whenever the user tells you something durable (a client detail, a decision, a preference), and "recall" when they reference the past.
 
@@ -103,6 +105,7 @@ function customerPrompt(persona: Persona) {
   const style = SYSTEM_PROMPT.slice(SYSTEM_PROMPT.indexOf("For everyday conversation"));
   return `You are ${persona.name}, a warm, sharp voice assistant${persona.userName ? ` for ${persona.userName}` : ""}. Help with their accounts, questions, ideas, writing, planning and everyday conversation.
 Use web_search for anything current or factual you aren't sure of (news, prices, exchange rates, sports, people, places) instead of guessing. Use your tools for their email (any provider — get_inbox, search_email, read_email, and propose_email for replies; the user approves every send), Search Console, Google (Calendar, Drive, Analytics, YouTube), Facebook, Instagram, X, TikTok, and their money: Stripe, PayPal and their bank account (Wise) — all read-only, you can never move money. If a tool says an account isn't configured, tell them to connect it on the Connections page — never pretend to have data. Anything that posts, sends or changes something is queued for their approval.
+Photos: when the user shows you a photo or screenshot (attached to their message, with its photo_ids), look at it yourself and say briefly what you see. To get something done about it, hand it on with photo_ids: code, app, website or bug problems go to the Developer (propose_developer_task, with the task written out and the photo describing the issue), anything else to the fitting specialist (ask_specialist, with a one-line description of the photo in context). To see something they want to show you through the camera (\"look at this error\", \"take a picture of my screen and send it to the developer\"), call show_photo (camera \"back\" for a screen, paper or object), not design_picture; design_picture is only for making or editing pictures.
 Pictures: design_picture makes them, and each is saved. To post one, use the propose_* post tools with design_id "latest" (or an id from list_designs); post designs automatically carry their uploaded brand logo (Account page → Your brand logo), so never ask the image model to draw a logo.
 To act on their computer (open apps or websites, switch Chrome profiles, list what's open, volume, music, quitting apps, restarting) use the computer_* tools; they reach the computer they linked with the desktop app. If none is linked or it's offline, tell them to link it on the Account page.
 Developer: their developer is Claude Code, running on their linked computer through the desktop app — never ask for a developer's name or contact details. "Line up / ask / tell the developer" means these tools: list_projects (their code projects), ask_developer (questions about a project's code, read-only, answers at once), propose_developer_task (changes, git, tests, fixes — runs after they approve), search_claude_chats (what was done in past Claude Code chats). To put the Design agent's pictures into a project (a blog post, a web page), make them with design_picture first, then call propose_developer_task with design_ids (e.g. ["latest:3"]) and the task written out (topic, where it goes); the Developer downloads them into the project. If the computer is offline or Claude Code isn't installed there, say exactly that.
@@ -132,6 +135,28 @@ function whereAndWhen(context: unknown): string {
   return `\n\n${lines.join("\n")}`;
 }
 
+/**
+ * Photos the user showed: Sarah sees the ones in the last few messages, and
+ * every one is named by id so she can hand it to an agent (photo_ids).
+ */
+async function withPhotos(userId: string, messages: { role: "user" | "assistant"; content: string; photoIds?: unknown }[]): Promise<AgentMessage[]> {
+  let shown = 0;
+  const out: AgentMessage[] = [];
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    const ids = m.role === "user" && Array.isArray(m.photoIds) ? m.photoIds.map(String).filter(id => /^[a-f0-9]{36}$/.test(id)).slice(0, 4) : [];
+    if (!ids.length) { out.unshift({ role: m.role, content: String(m.content ?? "") }); continue; }
+    const images: { mimeType: string; data: string }[] = [];
+    if (shown < 4) for (const id of ids) {
+      const bytes = await readPhoto(userId, id);
+      if (bytes && shown < 4) { images.push({ mimeType: "image/jpeg", data: bytes.toString("base64") }); shown++; }
+    }
+    const note = `[The user showed ${ids.length === 1 ? "a photo" : `${ids.length} photos`}${images.length ? " (attached)" : " earlier"}; photo_ids: ${JSON.stringify(ids)}]`;
+    out.unshift({ role: "user", content: `${String(m.content ?? "")}\n${note}`, images });
+  }
+  return out;
+}
+
 export async function POST(req: NextRequest) {
   const guard = await requireUser({ plan: true });
   if ("response" in guard) return guard.response;
@@ -147,7 +172,7 @@ export async function POST(req: NextRequest) {
   }
 
   const { messages, context } = (await req.json()) as {
-    messages: { role: "user" | "assistant"; content: string }[];
+    messages: { role: "user" | "assistant"; content: string; photoIds?: string[] }[];
     context?: unknown;
   };
   if (!Array.isArray(messages) || !messages.length) {
@@ -159,13 +184,13 @@ export async function POST(req: NextRequest) {
       const local = isOwner && SERVER_IS_OWNERS_MAC;
       const said = String(messages.at(-1)?.content ?? "");
       // The last 30 messages are plenty of context; older ones live on in memory.
-      const recent = messages.slice(-30);
+      const recent = await withPhotos(user.id, messages.slice(-30));
       const brief = await memoryBrief(user.id, persona.userName).catch(() => "");
       const result = await runViaGemini(recent, (local ? ownerPrompt(persona) : customerPrompt(persona)) + enginesBrief(user.id) + emailBrief() + devBrief(user.id) + brief + whereAndWhen(context), local ? {} : { exclude: LOCAL_TOOL });
       // One line per turn in the dev server log, for tuning the prompt.
       console.log(`[turn] ${user.email} said: ${JSON.stringify(said)}\n[turn] ${persona.name}: ${JSON.stringify(result.reply)}`);
       // Saved for the next visit, and learned from in the background.
-      logTurn(user.id, "user", said);
+      logTurn(user.id, "user", messages.at(-1)?.photoIds?.length ? `${said} [showed a photo]` : said);
       logTurn(user.id, "assistant", result.reply ?? "");
       void learnFromTurn(user.id, said, result.reply ?? "");
       return NextResponse.json(result);

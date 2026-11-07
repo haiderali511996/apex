@@ -11,6 +11,7 @@ export function useCamera() {
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const facingRef = useRef<"user" | "environment">("user");
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
   const stop = useCallback(() => {
@@ -20,16 +21,26 @@ export function useCamera() {
     setOpen(false);
   }, []);
 
-  /** Opens the camera and resolves once it is actually producing frames. */
-  const start = useCallback(async (): Promise<boolean> => {
+  /**
+   * Opens the camera and resolves once it is actually producing frames.
+   * "environment" is a phone's back camera, for pointing at a screen or paper;
+   * a laptop has one camera and uses it either way.
+   */
+  const start = useCallback(async (facing: "user" | "environment" = "user"): Promise<boolean> => {
     setError(null);
+    // Already open on the other side of a phone: switch.
+    if (streamRef.current && facingRef.current !== facing) {
+      streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+    }
+    facingRef.current = facing;
     if (!navigator.mediaDevices?.getUserMedia) {
       setError("This browser can't open a camera.");
       return false;
     }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" },
+        video: { width: { ideal: 1920 }, height: { ideal: 1080 }, facingMode: { ideal: facing } },
         audio: false,
       });
       streamRef.current = stream;
@@ -85,5 +96,5 @@ export function useCamera() {
     return canvas.toDataURL("image/jpeg", quality);
   }, []);
 
-  return { open, error, start, stop, capture, videoRef, stream: streamRef };
+  return { open, error, start, stop, capture, videoRef, stream: streamRef, facing: facingRef };
 }

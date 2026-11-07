@@ -11,7 +11,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import AssistantLogo from "@/components/AssistantLogo";
 import { AudioLines, Camera, CameraOff, LayoutGrid, MessageSquare, Mic, MicOff, Plug, ScanFace, Square, UserRound } from "lucide-react";
-import { pickVoice, useApexVoice, type VoiceState } from "@/lib/useApexVoice";
+import { pickVoice, uploadPhoto, useApexVoice, type ClientActionOutcome, type VoiceState } from "@/lib/useApexVoice";
 import { useCamera } from "@/lib/useCamera";
 import { useHandTracking } from "@/lib/handTracking";
 import { cameraCommand, closeAgentCommand, designEditCommand, designerCommand, faceCommand, photoCommand, readCommand, readPhoneMessage } from "@/lib/localCommands";
@@ -38,6 +38,9 @@ const STATE_LABEL: Record<VoiceState, string> = {
   speaking: "Speaking",
 };
 
+/** After "take a photo": a request to show it to someone or check something, not to edit it. */
+const SHOW_REQUEST = /\b(send|show|give|pass|hand|forward|share|developer|dev|agent|claude|bug|issue|error|problem|crash|screen|look|check|see|fix|debug|read|bhej|bhejo|dikha|dikhao|dekh|dekho|masla|ghalti)\b/i;
+
 const MIC_LABEL = { off: "Mic off", starting: "Connecting", wake: "Wake word", listening: "Mic live" } as const;
 
 type Tab = "chat" | "agents" | "today";
@@ -57,10 +60,25 @@ export default function SarahDeck() {
   const [design, setDesign] = useState<DesignWork | null>(null);
 
   /** Takes a sharp photo, opening the camera first if it's closed. */
-  const takePhoto = async (): Promise<string | { error: string }> => {
-    if (!camera.open && !(await camera.start())) return { error: camera.error ?? "I couldn't open the camera." };
+  const takePhoto = async (facing: "user" | "environment" = "user", width = 1024): Promise<string | { error: string }> => {
+    if ((!camera.open || camera.facing.current !== facing) && !(await camera.start(facing))) return { error: camera.error ?? "I couldn't open the camera." };
     // 1024px keeps Gemini's edit quick while still sharp on screen.
-    return camera.capture(1024, 0.9) ?? { error: "The camera is on, but I couldn't get a picture from it." };
+    return camera.capture(width, 0.9) ?? { error: "The camera is on, but I couldn't get a picture from it." };
+  };
+
+  /**
+   * A photo to look at (an error on a screen, a document): taken, saved, and
+   * sent to Sarah with the request, so she sees it and hands it to an agent.
+   */
+  const showPhoto = async (request: string, facing: "user" | "environment" = "environment"): Promise<ClientActionOutcome> => {
+    const shot = await takePhoto(facing, 1600);
+    if (typeof shot !== "string") return shot.error;
+    try {
+      const photo = await uploadPhoto(shot);
+      return { followUp: { text: request || "Here's a photo — take a look.", photos: [photo] } };
+    } catch (err) {
+      return err instanceof Error ? err.message : "I took the photo but couldn't upload it.";
+    }
   };
 
   /** Takes a photo, then has Design work on it — or just shows it and asks, with no instruction. */
@@ -144,6 +162,14 @@ export default function SarahDeck() {
       // Design: a photo to work from, a request addressed to Design, or a
       // follow-up edit while a design is on screen.
       const photoAsk = photoCommand(text);
+      // "Take a photo of this error and send it to the developer" is for Sarah
+      // to look at and pass on; Design only gets requests to make or edit it.
+      if (photoAsk !== null && SHOW_REQUEST.test(photoAsk)) {
+        const shown = await showPhoto(text);
+        if (typeof shown === "string" || !shown) return shown;
+        setTimeout(() => voice.send(shown.followUp.text, shown.followUp.photos), 0);
+        return "Got the photo — taking a look.";
+      }
       if (photoAsk !== null) return designFromCamera(photoAsk);
       const designAsk = designerCommand(text);
       if (designAsk) {
@@ -182,6 +208,7 @@ export default function SarahDeck() {
     },
     // Gemini understood a picture request the phrases above missed.
     onClientAction: async (action) => {
+      if (action.type === "show_photo") return showPhoto(action.request, action.camera === "front" ? "user" : "environment");
       if (action.type !== "design_picture") return null;
       return action.useCamera ? designFromCamera(action.instruction) : runDesign(action.instruction || "a striking picture");
     },

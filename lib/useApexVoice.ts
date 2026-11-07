@@ -5,7 +5,21 @@ import type { ClientAction, PendingAction } from "./agent/types";
 import { speakText, cancelSpeech, speechAvailable } from "./speech";
 
 export type VoiceState = "idle" | "listening" | "thinking" | "speaking";
-export type ChatMessage = { role: "user" | "assistant"; content: string };
+/** A photo shown to Sarah: its saved id, and a picture to show in the conversation. */
+export type ShownPhoto = { id: string; src: string };
+export type ChatMessage = { role: "user" | "assistant"; content: string; photos?: ShownPhoto[] };
+/** What a screen action reports: a line to say, or a message to send on (with the photo just taken). */
+export type ClientActionOutcome = string | null | { say?: string; followUp: { text: string; photos: ShownPhoto[] } };
+
+/** Saves a photo or screenshot on the server so Sarah and her agents can see it. */
+export async function uploadPhoto(source: File | Blob | string): Promise<ShownPhoto> {
+  const res = typeof source === "string"
+    ? await fetch("/api/agent/photo", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ image: source }) })
+    : await (() => { const form = new FormData(); form.append("photo", source, source instanceof File ? source.name : "photo.png"); return fetch("/api/agent/photo", { method: "POST", body: form }); })();
+  const body = await res.json().catch(() => ({})) as { id?: string; error?: string };
+  if (!res.ok || !body.id) throw new Error(body.error || "Couldn't upload the picture.");
+  return { id: body.id, src: typeof source === "string" ? source : URL.createObjectURL(source) };
+}
 
 import { getRecognitionCtor, VoiceRecognition, type InputStatus } from "./voiceRecognition";
 import { CloudRecognition } from "./cloudRecognition";
@@ -90,7 +104,7 @@ export function useApexVoice(options: {
    * Carries out what a tool asked the screen to do (take a photo for Design).
    * Returns the line Sarah says once it's done.
    */
-  onClientAction?: (action: ClientAction) => Promise<string | null>;
+  onClientAction?: (action: ClientAction) => Promise<ClientActionOutcome>;
 } = {}) {
   const speakEnabled = options.speak ?? true;
   const autoListen = options.autoListen ?? true;
@@ -118,7 +132,23 @@ export function useApexVoice(options: {
   const [inputStatus, setInputStatus] = useState<InputStatus>("off");
   const [heardText, setHeardText] = useState("");
   const speechGenerationRef = useRef(0);
-  const sendRef = useRef<(text: string) => void>(() => {});
+  const sendRef = useRef<(text: string, photos?: ShownPhoto[]) => void>(() => {});
+  // Photos attached and waiting for the next message, typed or spoken.
+  const [attached, setAttached] = useState<ShownPhoto[]>([]);
+  const attachedRef = useRef<ShownPhoto[]>([]);
+  attachedRef.current = attached;
+  const [attaching, setAttaching] = useState(0);
+  const attachPhoto = useCallback(async (source: File | Blob | string) => {
+    setAttaching(n => n + 1);
+    try {
+      const photo = await uploadPhoto(source);
+      setAttached(list => [...list, photo].slice(-4));
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Couldn't upload the picture.");
+    } finally { setAttaching(n => n - 1); }
+  }, []);
+  const removeAttached = useCallback((id: string) => setAttached(list => list.filter(p => p.id !== id)), []);
   const stateRef = useRef<VoiceState>("idle");
   // Background music steps aside for the whole exchange — while the user talks,
   // while Sarah thinks and speaks — and returns once neither has spoken for a
@@ -270,16 +300,20 @@ export function useApexVoice(options: {
   }, [setVoiceState, resumeListening]);
 
   const send = useCallback(
-    async (text: string) => {
-      const trimmed = text.trim();
-      if (!trimmed || stateRef.current === "thinking") return;
+    async (text: string, withPhotos?: ShownPhoto[]) => {
+      if (stateRef.current === "thinking") return;
+      // Attached photos go with this message, whether it was typed or spoken.
+      const photos = withPhotos ?? attachedRef.current;
+      const trimmed = text.trim() || (photos.length ? "Here's a photo — take a look." : "");
+      if (!trimmed) return;
+      if (!withPhotos && photos.length) { attachedRef.current = []; setAttached([]); }
       speechGenerationRef.current++;
       cancelSpeech();
       stopReveal();
       inputRef.current?.setMode(null);
       setVoiceState("thinking");
       setHeardText(trimmed);
-      const next = [...messagesRef.current, { role: "user" as const, content: trimmed }];
+      const next: ChatMessage[] = [...messagesRef.current, { role: "user" as const, content: trimmed, ...(photos.length ? { photos } : {}) }];
       messagesRef.current = next;
       setMessages(next);
       setError(null);
@@ -292,7 +326,8 @@ export function useApexVoice(options: {
         const music = musicCommand(trimmed);
         if (music === "off") { musicOff(); localReply = "Music off."; }
         else if (music === "on") { musicOn(); localReply = "Music on."; }
-        else localReply = await localCommandRef.current?.(trimmed);
+        // With a photo attached, it goes to Sarah to look at, not a screen command.
+        else if (!photos.length) localReply = await localCommandRef.current?.(trimmed);
       } catch (err) {
         localReply = err instanceof Error ? err.message : "That didn't work.";
       }
@@ -314,7 +349,8 @@ export function useApexVoice(options: {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           // Where and when the user is, so "where am I" or "what's the weather" just work.
-          body: JSON.stringify({ messages: next, context: await chatContext() }),
+          // Photos travel by id; the server has them.
+          body: JSON.stringify({ messages: next.map(m => ({ role: m.role, content: m.content, ...(m.photos?.length ? { photoIds: m.photos.map(p => p.id) } : {}) })), context: await chatContext() }),
         });
         data = await res.json();
       } catch {
@@ -339,16 +375,26 @@ export function useApexVoice(options: {
       // do it now, then say how it went instead of the "on it" line.
       if (Array.isArray(data.clientActions) && data.clientActions.length) {
         const outcomes: string[] = [];
+        let followUp: { text: string; photos: ShownPhoto[] } | null = null;
         for (const action of data.clientActions) {
           const handler = clientActionRef.current;
-          let outcome: string | null = null;
+          let outcome: ClientActionOutcome = null;
           try {
             outcome = handler ? await handler(action) : "Pictures and the camera work on the deck — open the home screen and ask me there.";
           } catch (err) {
             outcome = err instanceof Error ? err.message : "That didn't work.";
           }
           if (!mountedRef.current) return;
-          if (outcome) outcomes.push(outcome);
+          if (typeof outcome === "string") outcomes.push(outcome);
+          else if (outcome) { if (outcome.say) outcomes.push(outcome.say); followUp = outcome.followUp; }
+        }
+        // A photo was taken to look at: send it on with the request, as the next message.
+        if (followUp) {
+          if (outcomes.length) setMessages((m) => [...m, { role: "assistant", content: outcomes.join(" ") }]);
+          setVoiceState("idle");
+          const f = followUp;
+          setTimeout(() => sendRef.current(f.text, f.photos), 0);
+          return;
         }
         const said = outcomes.join(" ") || reply;
         setMessages((m) => [...m, { role: "assistant", content: said }]);
@@ -548,6 +594,11 @@ export function useApexVoice(options: {
     error,
     pendingActions,
     send,
+    /** Photos waiting to go with the next message; attach adds one (a file, or a data URL from the camera). */
+    attached,
+    attaching: attaching > 0,
+    attachPhoto,
+    removeAttached,
     toggle,
     startListening,
     stopListening,

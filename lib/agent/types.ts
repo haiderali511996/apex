@@ -62,4 +62,7 @@ export type ActionLogEntry = {
  * Something only the browser can do — use the camera, show a picture — that a
  * tool asks the deck to carry out after the reply arrives.
  */
-export type ClientAction = { type: "design_picture"; useCamera: boolean; instruction: string };
+export type ClientAction =
+  | { type: "design_picture"; useCamera: boolean; instruction: string }
+  /** Take a photo so Sarah (and the agent she hands it to) can see something; then `request` is sent with it. */
+  | { type: "show_photo"; camera: "front" | "back"; request: string };

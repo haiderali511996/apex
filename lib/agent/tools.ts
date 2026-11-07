@@ -11,6 +11,7 @@ import { askAboutChats, askDeveloper, listProjects, nameProject, resolveProject 
 import { claudeComputer, isOnline, listDevices, pickDevice, runOnDevice } from "@/lib/devices";
 import { currentUserId } from "@/lib/credentials";
 import { findDesign, listDesigns } from "@/lib/designs";
+import { pickPhotos } from "@/lib/photos";
 import { ENGINES, setAgentEngine } from "@/lib/agentEngines";
 import { startStep } from "@/lib/activity";
 import { currentProject, knownProjects, rememberProjectList, resolveProjectRef, setCurrentProject } from "@/lib/devContext";
@@ -335,6 +336,7 @@ export const toolDefinitions: Anthropic.Tool[] = [
         project: { type: "string", description: "Project name (as spoken is fine), \"project/subfolder\" (e.g. \"unc/web-next\"), or a folder path. Omit to use the current project." },
         task: { type: "string", description: "Exactly what to do, written out in full, e.g. \"Run git pull origin main and report what changed.\" or \"Write a new blog post about KYC and use the attached images in it.\"" },
         design_ids: { type: "array", items: { type: "string" }, description: "Pictures the Design agent made, to use in the work (a blog post, a page, the app): ids from list_designs, or \"latest\", \"latest:3\" for the newest three. The Developer downloads them into the project." },
+        photo_ids: { type: "array", items: { type: "string" }, description: "Photos or screenshots the user showed you (their ids from the conversation, or \"latest\"), e.g. of a bug, an error on screen or a layout to copy. The Developer downloads them and looks at them before working." },
       },
       required: ["task"],
     },
@@ -364,7 +366,7 @@ export const toolDefinitions: Anthropic.Tool[] = [
   /* ── Design: Gemini pictures, carried out on the user's screen ── */
   {
     name: "design_picture",
-    description: "Hand a picture request to the Design agent on the user's screen. With use_camera true, the deck takes a photo with their webcam right now and Design edits it per the instruction (leave the instruction empty to just take the photo). With use_camera false, Design makes a new picture from the instruction — a logo, poster, illustration. Use this whenever they ask for a photo, picture, selfie, image or design, in any wording or language — you do have a camera through this tool.",
+    description: "Hand a picture request to the Design agent on the user's screen. With use_camera true, the deck takes a photo with their webcam right now and Design edits it per the instruction (leave the instruction empty to just take the photo). With use_camera false, Design makes a new picture from the instruction — a logo, poster, illustration. Use this whenever they ask for a photo, picture, selfie, image or design to be made or edited, in any wording or language — you do have a camera through this tool. When they want you or an agent to see or check something (an error, a screen, a document), use show_photo instead.",
     input_schema: {
       type: "object",
       properties: {
@@ -372,6 +374,19 @@ export const toolDefinitions: Anthropic.Tool[] = [
         instruction: { type: "string", description: "What Design should make or change, in their words. Empty to just take a photo." },
       },
       required: ["use_camera", "instruction"],
+    },
+  },
+
+  {
+    name: "show_photo",
+    description: "Take a photo with the camera so you can see something the user wants to show you: an error or bug on a screen, a document, a product, a sketch, a place. The photo comes back to you in the next message with the request, so you can look at it and hand it on (photo_ids) to the right agent. Use this, not design_picture, when they want you or an agent to see or check something rather than to make a picture.",
+    input_schema: {
+      type: "object",
+      properties: {
+        camera: { type: "string", enum: ["front", "back"], description: "\"back\" (a phone's rear camera) for pointing at a screen, paper or object; \"front\" for the user themselves. On a laptop both use its camera." },
+        request: { type: "string", description: "What to do with it, in their words, e.g. \"send it to the developer to fix the error\"." },
+      },
+      required: ["camera", "request"],
     },
   },
 
@@ -389,7 +404,8 @@ export const toolDefinitions: Anthropic.Tool[] = [
       properties: {
         role: { type: "string", enum: specialistKeys(), description: "Which specialist to ask." },
         request: { type: "string", description: "What you need from them." },
-        context: { type: "string", description: "Any live data or background they should work from." },
+        context: { type: "string", description: "Any live data or background they should work from. If you pass photo_ids, also describe in a sentence what the photo shows." },
+        photo_ids: { type: "array", items: { type: "string" }, description: "Photos or screenshots the user showed you (ids from the conversation, or \"latest\") that the specialist should look at." },
       },
       required: ["role", "request"],
     },
@@ -575,6 +591,23 @@ Images to use (made by the Design agent). Work with local files only:
 Download URLs:
 ${unique.map(d => `- ${d.url} ("${d.prompt}")`).join("\n")}
 Follow the project's own conventions for this (read CLAUDE.md, README and any brief or command for it first). Don't deploy or push unless the task says to; report the files you added and how to preview them.`;
+}
+
+/**
+ * Photos the user showed, handed to the Developer: Claude Code downloads them
+ * into the project (kept out of git) and views them with its Read tool.
+ */
+function withPhotos(task: string, ids: unknown): string {
+  const photos = pickPhotos(currentUserOrThrow(), ids);
+  if (!photos.length) return task;
+  return `${task}
+
+Photos the user showed of this (screenshots or camera photos). Look at them before you start:
+1. Download each into this project's .sarah/photos/ folder, e.g. mkdir -p .sarah/photos && curl -fsSL -o .sarah/photos/photo-1.jpg <url>, and add ".sarah/" to .git/info/exclude so they are never committed.
+2. Open each downloaded file with the Read tool to see it (Read shows images). Say briefly what you see, and work from that.
+3. Don't put them in the project's own files unless the task says so.
+Download URLs:
+${photos.map((p, i) => `- photo-${i + 1}: ${p.url}`).join("\n")}`;
 }
 
 /** The design a post should carry, by id or "latest"; errors say what to do instead. */
@@ -838,7 +871,7 @@ async function runTool(name: string, input: Record<string, unknown>): Promise<To
     }
 
     case "propose_developer_task": {
-      input.task = withDesigns(String(input.task ?? ""), input.design_ids);
+      input.task = withPhotos(withDesigns(String(input.task ?? ""), input.design_ids), input.photo_ids);
       // Always, for every account: never push over someone else's work.
       input.task = `${input.task}\n\n${GIT_RULE}`;
       if (HOSTED) {
@@ -960,6 +993,13 @@ async function runTool(name: string, input: Record<string, unknown>): Promise<To
 
     case "web_search":
       return { text: await searchWeb(String(input.query || "").slice(0, 500)) };
+    case "show_photo": {
+      const camera = input.camera === "front" ? "front" : "back";
+      return {
+        text: "The deck is taking the photo now; it comes back to you with the request in the next message. Reply with one short line in their language, e.g. \"Hold it steady — taking the photo.\"",
+        clientAction: { type: "show_photo", camera, request: String(input.request ?? "").trim() },
+      };
+    }
     case "design_picture": {
       const useCamera = input.use_camera === true;
       const instruction = String(input.instruction ?? "").trim();
@@ -980,7 +1020,8 @@ async function runTool(name: string, input: Record<string, unknown>): Promise<To
     case "ask_specialist": {
       const role = input.role as string;
       if (!SPECIALISTS[role]) return { text: `Unknown specialist "${role}". Available: ${specialistKeys().join(", ")}.` };
-      const answer = await askSpecialist(role, input.request as string, input.context as string | undefined);
+      const photos = pickPhotos(currentUserOrThrow(), input.photo_ids);
+      const answer = await askSpecialist(role, input.request as string, input.context as string | undefined, photos);
       return { text: `${SPECIALISTS[role].name} says:\n${answer}` };
     }
 
