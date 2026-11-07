@@ -45,6 +45,27 @@ const STEPS: { id: string; title: string; body: React.ReactNode }[] = [
     </ol>,
   },
   {
+    id: "email", title: "4b. Email from any provider",
+    body: <>
+      <p>Your assistant can read, search and draft replies in any inbox: Gmail, Outlook, Yahoo, iCloud, Zoho, AWS WorkMail, your web host or your company&apos;s server. It uses the standard IMAP (reading) and SMTP (sending) that every provider offers, and never sends anything until you approve the draft.</p>
+      <ol>
+        <li>On <Link href="/connections">Connections</Link>, under <b>Email (any provider)</b>, enter your email address and password, then press <b>Save</b>. The servers are found automatically and the connection is tested.</li>
+        <li>If the test says the login was refused, your provider needs an <b>app password</b> (a separate password just for apps):
+          <ul>
+            <li><b>Gmail / Google Workspace:</b> turn on 2-Step Verification, then create one at <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noreferrer">myaccount.google.com/apppasswords</a>.</li>
+            <li><b>Yahoo:</b> Account security → Generate app password.</li>
+            <li><b>iCloud:</b> <a href="https://account.apple.com" target="_blank" rel="noreferrer">account.apple.com</a> → Sign-In and Security → App-Specific Passwords.</li>
+            <li><b>Zoho:</b> My Account → Security → App passwords, and switch on IMAP in Zoho Mail settings.</li>
+            <li><b>AWS WorkMail:</b> your normal WorkMail password works (or an app password if your organisation uses MFA). Servers are <code>imap.mail.&lt;region&gt;.awsapps.com</code> and <code>smtp.mail.&lt;region&gt;.awsapps.com</code>, which are found automatically from your domain.</li>
+            <li><b>Outlook / Microsoft 365:</b> your administrator must allow IMAP and SMTP sign-in (&quot;authenticated SMTP&quot;) for the mailbox; use an app password if 2-step sign-in is on.</li>
+          </ul>
+        </li>
+        <li>If the test says the server wasn&apos;t found, type your provider&apos;s IMAP and SMTP servers in the two optional boxes, like <code>mail.example.com:993</code> and <code>mail.example.com:465</code>. Your host lists them under &quot;email client settings&quot;.</li>
+        <li>Ask: &quot;What&apos;s new in my inbox?&quot;, &quot;Find the invoice from Ahmed last week&quot;, &quot;Reply to that saying I&apos;ll call tomorrow&quot;. Replies appear as drafts for you to approve.</li>
+      </ol>
+    </>,
+  },
+  {
     id: "social", title: "5. Facebook, Instagram, X and TikTok",
     body: <ul>
       <li><b>Facebook & Instagram:</b> in <a href="https://developers.facebook.com/tools/explorer/" target="_blank" rel="noreferrer">Graph API Explorer</a>, get a long-lived Page access token, your Page ID and (for Instagram) your business account ID.</li>

@@ -33,7 +33,7 @@ export default function Connections() {
     if (!res.ok) return note(group.id, false, "Couldn't save. Try again.");
     setDrafts(d => { const next = { ...d }; for (const k of Object.keys(values)) delete next[k]; return next; });
     await load();
-    if (group.id === "gemini" || group.id === "fish") await test(group.id);
+    if (group.id === "gemini" || group.id === "fish" || group.id === "email") await test(group.id);
     else note(group.id, true, "Saved.");
   };
 
@@ -102,7 +102,7 @@ export default function Connections() {
             )}
             <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginTop: 8 }}>
               <button type="button" className="btn btn-primary btn-small" disabled={busy === group.id} onClick={() => save(group)}>{busy === group.id ? "Saving…" : "Save"}</button>
-              {(group.id === "gemini" || group.id === "fish") && <button type="button" className="btn btn-ghost btn-small" disabled={busy === group.id} onClick={() => test(group.id)}>Test</button>}
+              {(group.id === "gemini" || group.id === "fish" || group.id === "email") && <button type="button" className="btn btn-ghost btn-small" disabled={busy === group.id} onClick={() => test(group.id)}>Test</button>}
               {group.id === "google" && (data.googleSignedIn
                 ? <><span className="form-ok" style={{ margin: 0 }}>Signed in with Google</span><button type="button" className="btn btn-ghost btn-small" onClick={disconnectGoogle}>Disconnect</button></>
                 : <a className="btn btn-ghost btn-small" href="/api/google/connect">Sign in with Google</a>)}

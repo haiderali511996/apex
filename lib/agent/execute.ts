@@ -1,3 +1,4 @@
+import * as mailbox from "./connectors/mailbox";
 import { meta, x, tiktok, workspace } from "./connectors";
 import { appendActionLog } from "./store";
 import { runDeveloperTask } from "./developer";
@@ -26,6 +27,9 @@ export async function runPendingAction(action: PendingAction): Promise<string> {
         break;
       case "tiktok_post":
         result = await tiktok.publishTiktokVideo(action.payload as { videoUrl: string; caption: string });
+        break;
+      case "mailbox_send":
+        result = await mailbox.sendMail(action.payload as { to: string; subject: string; body: string; inReplyTo?: string });
         break;
       case "send_email":
         result = await workspace.sendEmail(action.payload as { to: string; subject: string; body: string });

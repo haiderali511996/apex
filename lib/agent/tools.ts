@@ -12,6 +12,7 @@ import { claudeComputer, isOnline, listDevices, pickDevice, runOnDevice } from "
 import { currentUserId } from "@/lib/credentials";
 import { findDesign, listDesigns } from "@/lib/designs";
 import { ENGINES, setAgentEngine } from "@/lib/agentEngines";
+import * as mailbox from "./connectors/mailbox";
 import { addMemory, CATEGORIES, deleteMemory, recentTurns, searchMemories, type Category } from "@/lib/memory";
 import { controlMediaApps, focusChromeTab, systemInfo, listChromeProfiles, listChromeTabs, listRunningApps, openApp, openUrl, setVolume } from "./mac";
 import type { ClientAction, PendingAction, Report } from "./types";
@@ -128,23 +129,32 @@ export const toolDefinitions: Anthropic.Tool[] = [
   /* ── Email / Calendar / Drive ── */
   {
     name: "get_inbox",
-    description: "Read the user's unread Gmail inbox — senders, subjects and snippets. Use for inbox triage.",
+    description: "Read the user's inbox: unread mail first (senders, subjects, snippets, ids). Works with any email provider: the account connected under Email on the Connections page, and/or Gmail through Google sign-in. Reading never marks mail as read.",
     input_schema: {
       type: "object",
-      properties: { maxResults: { type: "number", description: "How many unread messages. Default 10." } },
+      properties: {
+        maxResults: { type: "number", description: "How many messages. Default 10." },
+        account: { type: "string", enum: ["email", "gmail"], description: "Only one account: \"email\" (the connected inbox, any provider) or \"gmail\". Omit to check every connected account." },
+      },
     },
   },
   {
     name: "search_email",
-    description: "Search the user's Gmail with a Gmail search query (e.g. 'from:client@x.com newer_than:7d').",
+    description: "Search the user's email on any provider. Query words plus optional from:, to:, subject:, newer_than:7d, older_than:30d, is:unread.",
     input_schema: {
       type: "object",
       properties: {
-        query: { type: "string", description: "Gmail search syntax." },
+        query: { type: "string", description: "e.g. 'from:client@x.com newer_than:7d invoice'." },
         maxResults: { type: "number" },
+        account: { type: "string", enum: ["email", "gmail"], description: "Omit to search every connected account." },
       },
       required: ["query"],
     },
+  },
+  {
+    name: "read_email",
+    description: "Read one whole message from the connected inbox (any provider) by the id shown in get_inbox or search_email: full text, recipients, attachments' names. Use before replying, summarising or acting on an email.",
+    input_schema: { type: "object", properties: { id: { type: "number", description: "The message id from the list." } }, required: ["id"] },
   },
   {
     name: "propose_email",
@@ -155,6 +165,8 @@ export const toolDefinitions: Anthropic.Tool[] = [
         to: { type: "string", description: "Recipient email address." },
         subject: { type: "string" },
         body: { type: "string", description: "Plain-text body." },
+        account: { type: "string", enum: ["email", "gmail"], description: "Which account sends it. Omit to use the connected inbox (any provider), or Gmail if that's the only one. When replying, send from the account the email came to." },
+        in_reply_to: { type: "string", description: "When replying to a message from read_email: its Message-ID, so it threads." },
       },
       required: ["to", "subject", "body"],
     },
@@ -639,15 +651,31 @@ export async function executeTool(name: string, input: Record<string, unknown>):
     }
 
     case "get_inbox":
-      return { text: reportToText(await workspace.getInboxSummary((input.maxResults as number) || 10)) };
-    case "search_email":
-      return { text: reportToText(await workspace.searchEmail(input.query as string, (input.maxResults as number) || 10)) };
+    case "search_email": {
+      const which = input.account as string | undefined;
+      const useBox = which !== "gmail" && mailbox.isConfigured();
+      const useGmail = which !== "email" && workspace.isConfigured();
+      if (!useBox && !useGmail) return { text: which === "gmail" ? "Gmail isn't connected: sign in with Google on the Connections page." : "No email is connected. Add any email account under Email on the Connections page (or sign in with Google for Gmail)." };
+      const max = (input.maxResults as number) || 10;
+      const parts: string[] = [];
+      if (useBox) parts.push(await (name === "get_inbox" ? mailbox.getInbox(max) : mailbox.searchMail(String(input.query ?? ""), max)).catch(err => `${mailbox.mailboxAddress()}: ${err instanceof Error ? err.message : err}`));
+      if (useGmail) parts.push(`Gmail: ${reportToText(await (name === "get_inbox" ? workspace.getInboxSummary(max) : workspace.searchEmail(String(input.query ?? ""), max)))}`);
+      return { text: parts.join("\n\n") };
+    }
+    case "read_email": {
+      if (!mailbox.isConfigured()) return { text: "Reading a whole message works with the inbox connected under Email on the Connections page." };
+      return { text: await mailbox.readMail(Number(input.id)) };
+    }
     case "propose_email": {
+      const viaBox = input.account === "email" || (input.account !== "gmail" && mailbox.isConfigured());
+      if (viaBox && !mailbox.isConfigured()) return { text: "No email account is connected. Add one under Email on the Connections page." };
+      if (!viaBox && !workspace.isConfigured()) return { text: "No email account is connected to send from. Add one under Email on the Connections page, or sign in with Google." };
+      const from = viaBox ? mailbox.mailboxAddress() : "Gmail";
       const action = await createPendingAction({
         platform: "email",
-        kind: "send_email",
-        summary: `Email ${input.to} — "${input.subject}"`,
-        payload: { to: input.to, subject: input.subject, body: input.body },
+        kind: viaBox ? "mailbox_send" : "send_email",
+        summary: `Email from ${from} to ${input.to} — "${input.subject}"\n\n${String(input.body).slice(0, 1500)}`,
+        payload: { to: input.to, subject: input.subject, body: input.body, ...(viaBox && input.in_reply_to ? { inReplyTo: input.in_reply_to } : {}) },
       });
       return { text: `Draft queued for your approval (id ${action.id}). Nothing has been sent yet.`, pendingAction: action };
     }

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
 import { enterUser, cred } from "@/lib/credentials";
+import { isConfigured as mailboxConfigured, testMailbox } from "@/lib/agent/connectors/mailbox";
 
 export const runtime = "nodejs";
 
@@ -23,6 +24,11 @@ export async function POST(req: NextRequest) {
       if (!key) return NextResponse.json({ ok: false, message: "No Fish Audio key saved yet." });
       const res = await fetch("https://api.fish.audio/model?self=true&page_size=1", { headers: { Authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(20_000) });
       return NextResponse.json(res.ok ? { ok: true, message: "Fish Audio key works." } : { ok: false, message: res.status === 401 || res.status === 403 ? "Fish Audio rejected this key." : `Fish Audio answered HTTP ${res.status}.` });
+    }
+    if (group === "email") {
+      if (!mailboxConfigured()) return NextResponse.json({ ok: false, message: "Save your email address and password first." });
+      try { return NextResponse.json({ ok: true, message: await testMailbox() }); }
+      catch (err) { return NextResponse.json({ ok: false, message: err instanceof Error ? err.message : "Couldn't connect." }); }
     }
     return NextResponse.json({ ok: false, message: "This connection is checked the first time your assistant uses it." });
   } catch {
