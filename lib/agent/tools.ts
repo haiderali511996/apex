@@ -546,6 +546,9 @@ function reportToText(r: Report): string {
 
 export type ToolRunResult = { text: string; pendingAction?: PendingAction; clientAction?: ClientAction };
 
+/** Added to every Developer task. */
+const GIT_RULE = "Git rule: before any git push, first run git pull on that branch (fetch and integrate the remote changes the way the project does, merge or rebase) and make sure it still builds; if the pull brings conflicts, stop and report them instead of pushing or forcing.";
+
 /**
  * Designs handed to the Developer: their public links go into the task, with
  * instructions to download them into the project and follow its conventions.
@@ -818,6 +821,8 @@ export async function executeTool(name: string, input: Record<string, unknown>):
 
     case "propose_developer_task": {
       input.task = withDesigns(String(input.task ?? ""), input.design_ids);
+      // Always, for every account: never push over someone else's work.
+      input.task = `${input.task}\n\n${GIT_RULE}`;
       if (HOSTED) {
         const userId = currentUserOrThrow(), device = devComputer(userId);
         const project = await projectOnComputer(input.project as string | undefined);

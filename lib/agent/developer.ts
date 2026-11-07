@@ -231,6 +231,7 @@ const TASK_BRIEF =
   "You are the Developer agent inside Sarah, Haider's personal assistant. Haider approved this exact task through Sarah; do it now, in this project, with the terminal and file tools. " +
   "Do only what the task asks. Don't push, force-push, delete branches, deploy, or remove files beyond the task unless it explicitly says to. " +
   "If something could lose work — uncommitted changes in the way, merge conflicts, a failing migration — stop and report it instead of forcing it through. " +
+  "Git rule: before any git push, first run git pull on that branch (fetch and integrate the remote changes the way the project does, merge or rebase) and make sure it still builds; if the pull brings conflicts, stop and report them instead of pushing or forcing. " +
   "Finish with a short report Sarah can read aloud: the first sentence says what happened, then the commands you ran and anything Haider should know.";
 
 /** Hands one question about a project to Claude Code and returns its answer. */
