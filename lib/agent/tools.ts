@@ -12,6 +12,7 @@ import { claudeComputer, isOnline, listDevices, pickDevice, runOnDevice } from "
 import { currentUserId } from "@/lib/credentials";
 import { findDesign, listDesigns } from "@/lib/designs";
 import { ENGINES, setAgentEngine } from "@/lib/agentEngines";
+import { currentProject, knownProjects, rememberProjectList, resolveProjectRef, setCurrentProject } from "@/lib/devContext";
 import * as mailbox from "./connectors/mailbox";
 import { addMemory, CATEGORIES, deleteMemory, recentTurns, searchMemories, type Category } from "@/lib/memory";
 import { controlMediaApps, focusChromeTab, systemInfo, listChromeProfiles, listChromeTabs, listRunningApps, openApp, openUrl, setVolume } from "./mac";
@@ -317,10 +318,10 @@ export const toolDefinitions: Anthropic.Tool[] = [
     input_schema: {
       type: "object",
       properties: {
-        project: { type: "string", description: "Project name (as spoken is fine), or a folder path inside their home folder." },
+        project: { type: "string", description: "Project name (as spoken is fine), \"project/subfolder\" (e.g. \"unc/web-next\"), or a folder path. Omit to use the current project." },
         task: { type: "string", description: "The question or task, written out in full for a developer who hasn't heard the conversation." },
       },
-      required: ["project", "task"],
+      required: ["task"],
     },
   },
 
@@ -330,11 +331,11 @@ export const toolDefinitions: Anthropic.Tool[] = [
     input_schema: {
       type: "object",
       properties: {
-        project: { type: "string", description: "Project name (as spoken is fine), or a folder path inside their home folder." },
+        project: { type: "string", description: "Project name (as spoken is fine), \"project/subfolder\" (e.g. \"unc/web-next\"), or a folder path. Omit to use the current project." },
         task: { type: "string", description: "Exactly what to do, written out in full, e.g. \"Run git pull origin main and report what changed.\" or \"Write a new blog post about KYC and use the attached images in it.\"" },
         design_ids: { type: "array", items: { type: "string" }, description: "Pictures the Design agent made, to use in the work (a blog post, a page, the app): ids from list_designs, or \"latest\", \"latest:3\" for the newest three. The Developer downloads them into the project." },
       },
-      required: ["project", "task"],
+      required: ["task"],
     },
   },
   {
@@ -585,10 +586,24 @@ function onDevComputer(action: string, args: Record<string, unknown>, timeoutMs:
   return runOnDevice(userId, devComputer(userId).id, action, args, timeoutMs);
 }
 const squashName = (s: string) => String(s).toLowerCase().replace(/[^a-z0-9]/g, "");
-/** A project name the user taught Sarah turns into its folder; anything else goes to the computer as said. */
-async function savedProjectPath(name: string) {
-  const saved = (await getProjectNames())[squashName(name)];
-  return saved?.path ?? name;
+/**
+ * The exact folder for a spoken project on the user's computer (see
+ * lib/devContext.ts). The project list is refreshed from the computer when
+ * it's stale, so names resolve to real folders instead of guesses.
+ */
+async function projectOnComputer(said: string | undefined): Promise<string> {
+  const userId = currentUserOrThrow();
+  if (!knownProjects(userId).fresh) {
+    const listing = await onDevComputer("dev_projects", {}, 60_000).catch(() => "");
+    if (listing) rememberProjectList(userId, listing);
+  }
+  return resolveProjectRef(userId, said, await getProjectNames());
+}
+
+/** The folder a Developer answer came from ("name (~/path):" on its first line) becomes the current project. */
+function noteProjectFrom(userId: string, answer: string) {
+  const m = /^[^\n(]+\(((?:~|\/|[A-Za-z]:\\)[^)]*)\):/.exec(answer);
+  if (m) setCurrentProject(userId, m[1]);
 }
 
 function currentUserOrThrow(): string {
@@ -774,13 +789,22 @@ export async function executeTool(name: string, input: Record<string, unknown>):
     }
 
     case "list_projects": {
-      if (HOSTED) return { text: await onDevComputer("dev_projects", {}, 60_000) };
+      if (HOSTED) {
+        const listing = await onDevComputer("dev_projects", {}, 60_000);
+        rememberProjectList(currentUserOrThrow(), listing);
+        const current = currentProject(currentUserOrThrow());
+        return { text: `${listing}${current ? `\n\nCurrent project: ${current}` : ""}` };
+      }
       const projects = await listProjects();
       if (!projects.length) return { text: "Claude Code hasn't been used in any project on this Mac yet." };
       return { text: projects.map((p) => `${p.name} — ${p.path} (${p.source === "claude-code" ? "opened in Claude Code" : "found on this Mac"}, last active ${p.lastActive.slice(0, 10)})`).join("\n") };
     }
     case "ask_developer": {
-      if (HOSTED) return { text: `Developer (Claude Code) on ${await devComputerName()}: ${await onDevComputer("dev_ask", { project: await savedProjectPath(input.project as string), task: input.task }, 5 * 60_000)}` };
+      if (HOSTED) {
+        const answer = await onDevComputer("dev_ask", { project: await projectOnComputer(input.project as string | undefined), task: input.task }, 5 * 60_000);
+        noteProjectFrom(currentUserOrThrow(), answer);
+        return { text: `Developer (Claude Code) on ${await devComputerName()}: ${answer}` };
+      }
       const project = await resolveProject(input.project as string);
       if ("error" in project) return { text: project.error };
       const answer = await askDeveloper(project, input.task as string);
@@ -792,7 +816,8 @@ export async function executeTool(name: string, input: Record<string, unknown>):
       input.task = withDesigns(String(input.task ?? ""), input.design_ids);
       if (HOSTED) {
         const userId = currentUserOrThrow(), device = devComputer(userId);
-        const project = await savedProjectPath(input.project as string);
+        const project = await projectOnComputer(input.project as string | undefined);
+        setCurrentProject(userId, project);
         const pending = await createPendingAction({ platform: "computer", kind: "device_command", summary: `Claude Code on ${device.name}, in ${project}: ${input.task}`, payload: { userId, deviceId: device.id, action: "dev_task", args: { project, task: input.task } } });
         return { text: `Task queued for approval (id ${pending.id}). Nothing has run yet; Claude Code on ${device.name} starts once it's approved.`, pendingAction: pending };
       }

@@ -12,6 +12,7 @@ import { enterUser } from "@/lib/credentials";
 import { learnFromTurn, logTurn, memoryBrief } from "@/lib/memory";
 import { enginesBrief } from "@/lib/agentEngines";
 import { emailBrief } from "@/lib/agent/connectors/mailbox";
+import { devBrief } from "@/lib/devContext";
 
 export const runtime = "nodejs";
 
@@ -160,7 +161,7 @@ export async function POST(req: NextRequest) {
       // The last 30 messages are plenty of context; older ones live on in memory.
       const recent = messages.slice(-30);
       const brief = await memoryBrief(user.id, persona.userName).catch(() => "");
-      const result = await runViaGemini(recent, (local ? ownerPrompt(persona) : customerPrompt(persona)) + enginesBrief(user.id) + emailBrief() + brief + whereAndWhen(context), local ? {} : { exclude: LOCAL_TOOL });
+      const result = await runViaGemini(recent, (local ? ownerPrompt(persona) : customerPrompt(persona)) + enginesBrief(user.id) + emailBrief() + devBrief(user.id) + brief + whereAndWhen(context), local ? {} : { exclude: LOCAL_TOOL });
       // One line per turn in the dev server log, for tuning the prompt.
       console.log(`[turn] ${user.email} said: ${JSON.stringify(said)}\n[turn] ${persona.name}: ${JSON.stringify(result.reply)}`);
       // Saved for the next visit, and learned from in the background.
