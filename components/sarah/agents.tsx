@@ -1,4 +1,5 @@
 "use client";
+import FinancePanel from "./FinancePanel";
 
 /**
  * Sarah's specialists: the roster shown on the deck, what each one handles,
@@ -140,7 +141,8 @@ export function AgentOverview({ sel, onClose }: { sel: NodeSel; onClose: () => v
   return (
     <div ref={panelRef} className="sarah-agent-overview" role="dialog" aria-modal="true" aria-label={`${sel.name} overview`} style={{
       position: "fixed", left: pos.x, top: pos.y,
-      width: "min(340px, 92vw)", zIndex: 60,
+      width: sel.key === "finance" ? "min(440px, 92vw)" : "min(340px, 92vw)", zIndex: 60,
+      maxHeight: "calc(100vh - 40px)", overflowY: "auto",
       background: "rgba(4,3,12,0.92)",
       backdropFilter: "blur(24px)",
       border: `1px solid ${c}44`,
@@ -172,6 +174,7 @@ export function AgentOverview({ sel, onClose }: { sel: NodeSel; onClose: () => v
       </div>
 
       <div style={{ padding: "14px 16px", display: "flex", flexDirection: "column", gap: 16 }}>
+        {sel.key === "finance" && <FinancePanel color={c} />}
         <div>
           <div style={{ fontSize: 9, letterSpacing: "0.14em", color: `${c}99`, marginBottom: 8, fontFamily: "var(--font-mono)" }}>WHAT IT HANDLES</div>
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>

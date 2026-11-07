@@ -12,7 +12,7 @@ export type ActivityStep = { label: string; status: "running" | "done" | "failed
 export type AgentActivity = { agent: string; key: string; color: string; steps: ActivityStep[]; startedAt: number; updatedAt: number };
 
 const CYAN = "#00e5ff", AMBER = "#f5a623", SLATE = "#7f9bb3";
-const KEEP_MS = 90_000;
+const KEEP_MS = 150_000;
 
 type Agent = { key: string; name: string; color: string };
 const A = (key: string, name: string, color: string): Agent => ({ key, name, color });

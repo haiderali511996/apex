@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import FinancePanel from "./FinancePanel";
 
 /**
  * Agents at work, live. The Developer at work: Claude Code's to-do list and each step it
@@ -113,7 +114,8 @@ function AgentCard({ a, now, onClose }: { a: Activity; now: number; onClose: () 
   const last = a.steps.at(-1);
   return (
     <div role="status" aria-live="polite" aria-label={`${a.agent} progress`} className="agent-dock-card" style={{
-      width: "min(300px, calc(100vw - 32px))",
+      width: a.key === "finance" ? "min(420px, calc(100vw - 32px))" : "min(300px, calc(100vw - 32px))",
+      maxHeight: "calc(100vh - 160px)", overflowY: "auto",
       background: "rgba(4,3,12,0.92)", backdropFilter: "blur(24px)",
       border: `1px solid ${a.color}44`, borderRadius: 16,
       boxShadow: `0 0 32px ${a.color}14, 0 8px 32px rgba(0,0,0,0.55)`,
@@ -136,7 +138,8 @@ function AgentCard({ a, now, onClose }: { a: Activity; now: number; onClose: () 
             <span style={{ overflowWrap: "anywhere" }}>{s.label}</span>
           </div>
         ))}
-        {!running && last?.detail && <div style={{ color: failed ? "#ff8a80" : "#8aa0b4", fontSize: 12.5, borderTop: "1px solid #ffffff14", paddingTop: 8, marginTop: 2, overflowWrap: "anywhere" }}>{last.detail}</div>}
+        {!running && last?.detail && a.key !== "finance" && <div style={{ color: failed ? "#ff8a80" : "#8aa0b4", fontSize: 12.5, borderTop: "1px solid #ffffff14", paddingTop: 8, marginTop: 2, overflowWrap: "anywhere" }}>{last.detail}</div>}
+        {a.key === "finance" && <div style={{ borderTop: "1px solid #ffffff14", paddingTop: 10, marginTop: 4 }}><FinancePanel color={a.color} /></div>}
       </div>
     </div>
   );
@@ -181,7 +184,7 @@ export default function AgentDock() {
   const hide = (id: string) => setHidden(h => new Set(h).add(id));
   const shownJobs = jobs.filter(j => !hidden.has(j.id));
   // A finished agent card stays 25 s so its result can be read.
-  const shownAgents = agents.filter(a => !hidden.has(`${a.key}:${a.startedAt}`) && (a.steps.some(s => s.status === "running") || now - a.updatedAt < 25_000));
+  const shownAgents = agents.filter(a => !hidden.has(`${a.key}:${a.startedAt}`) && (a.steps.some(s => s.status === "running") || now - a.updatedAt < (a.key === "finance" ? 120_000 : 25_000)));
   if (!shownJobs.length && !shownAgents.length) return null;
 
   return (
