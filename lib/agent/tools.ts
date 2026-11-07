@@ -564,8 +564,12 @@ function withDesigns(task: string, ids: unknown): string {
   const unique = [...new Map(picked.map(d => [d.url, d])).values()];
   return `${task}
 
-Images to use (made by the Design agent; download each with curl, e.g. curl -fsSL -o <file> <url>, into the folder this project uses for this kind of content, with descriptive file names; then reference them, with good alt text):
-${unique.map((d, i) => `${i + 1}. ${d.url}: "${d.prompt}"`).join("\n")}
+Images to use (made by the Design agent). Work with local files only:
+1. Download each to this computer first, into ~/Documents/UNC Assistant/designs/ (create it if needed), e.g. curl -fsSL -o ~/Documents/UNC\\ Assistant/designs/<descriptive-name>.jpg <url>. Keep these copies there.
+2. Copy them into the folder this project uses for this kind of content, with descriptive file names, and reference those project files (with good alt text).
+3. Never link to the download URLs below from the project; they are only where to fetch the files from.
+Download URLs:
+${unique.map(d => `- ${d.url} ("${d.prompt}")`).join("\n")}
 Follow the project's own conventions for this (read CLAUDE.md, README and any brief or command for it first). Don't deploy or push unless the task says to; report the files you added and how to preview them.`;
 }
 
