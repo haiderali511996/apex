@@ -12,6 +12,7 @@ import { claudeComputer, isOnline, listDevices, pickDevice, runOnDevice } from "
 import { currentUserId } from "@/lib/credentials";
 import { findDesign, listDesigns } from "@/lib/designs";
 import { ENGINES, setAgentEngine } from "@/lib/agentEngines";
+import { startStep } from "@/lib/activity";
 import { currentProject, knownProjects, rememberProjectList, resolveProjectRef, setCurrentProject } from "@/lib/devContext";
 import * as mailbox from "./connectors/mailbox";
 import { addMemory, CATEGORIES, deleteMemory, recentTurns, searchMemories, type Category } from "@/lib/memory";
@@ -619,7 +620,24 @@ function currentUserOrThrow(): string {
   return id;
 }
 
+/**
+ * Runs a tool and records it as a step of the agent doing the work, for the
+ * deck's live agent cards (lib/activity.ts). Design is recorded where the
+ * picture is actually made (the imagine route), not here.
+ */
 export async function executeTool(name: string, input: Record<string, unknown>): Promise<ToolRunResult> {
+  const end = name === "design_picture" ? () => {} : startStep(currentUserId(), name, input);
+  try {
+    const result = await runTool(name, input);
+    end(true, result.text.split("\n").find(l => l.trim())?.slice(0, 220));
+    return result;
+  } catch (err) {
+    end(false, err instanceof Error ? err.message : String(err));
+    throw err;
+  }
+}
+
+async function runTool(name: string, input: Record<string, unknown>): Promise<ToolRunResult> {
   switch (name) {
     case "get_connector_status":
       return { text: JSON.stringify(allConnectorStatuses(), null, 2) };

@@ -183,7 +183,7 @@ export function saveProgress(deviceId: string, commandId: string, progress: unkn
   db().prepare("UPDATE device_commands SET progress = ?, updated_at = ? WHERE id = ? AND device_id = ? AND status IN ('queued', 'sent')").run(text, new Date().toISOString(), commandId, deviceId);
 }
 
-export type Job = { id: string; action: string; computer: string; task: string; status: string; progress: unknown; result: string | null; startedAt: string; updatedAt: string };
+export type Job = { id: string; action: string; title: string; computer: string; task: string; status: string; progress: unknown; result: string | null; startedAt: string; updatedAt: string };
 
 /** Claude Code jobs that are running, or finished in the last two minutes, for the live Developer panel. */
 export function recentJobs(userId: string): Job[] {
@@ -198,6 +198,9 @@ export function recentJobs(userId: string): Job[] {
     let progress: unknown = null;
     try { progress = r.progress ? JSON.parse(r.progress) : null; } catch { /* keep null */ }
     const task = String(args.task ?? args.prompt ?? "").split("\n\nImages to use")[0].split("\n\nGit rule")[0].replace(/^You are the [\s\S]*?Request: /, "").slice(0, 400);
-    return { id: r.id, action: r.action, computer: r.computer, task, status: r.status, progress, result: r.status === "queued" || r.status === "sent" ? null : (r.result ?? "").slice(0, 1500), startedAt: r.created_at, updatedAt: r.updated_at };
+    // An agent set to Claude runs as claude_ask; its prompt names the agent.
+    const specialist = r.action === "claude_ask" ? /You are the (.+?) specialist/.exec(String(args.prompt ?? ""))?.[1] : null;
+    const title = specialist ? `${specialist} · Claude` : r.action === "claude_ask" ? "Claude" : "Developer";
+    return { id: r.id, action: r.action, title, computer: r.computer, task, status: r.status, progress, result: r.status === "queued" || r.status === "sent" ? null : (r.result ?? "").slice(0, 1500), startedAt: r.created_at, updatedAt: r.updated_at };
   });
 }
