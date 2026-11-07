@@ -326,12 +326,13 @@ export const toolDefinitions: Anthropic.Tool[] = [
 
   {
     name: "propose_developer_task",
-    description: "Queue a task for the Developer (Claude Code on the user's computer) that runs terminal commands or changes files in a project — git pull, installing dependencies, running tests or the build, fixing a bug, making an edit. Nothing runs until the user approves it in the UI; then Claude Code does it with the terminal and reports back. Use this instead of telling the user to run commands themselves.",
+    description: "Queue a task for the Developer (Claude Code on the user's computer) that runs terminal commands or changes files in a project — git pull, installing dependencies, running tests or the build, fixing a bug, making an edit, writing a blog post or page with pictures the Design agent made (pass design_ids). Nothing runs until the user approves it in the UI; then Claude Code does it with the terminal and reports back. Use this instead of telling the user to run commands themselves.",
     input_schema: {
       type: "object",
       properties: {
         project: { type: "string", description: "Project name (as spoken is fine), or a folder path inside their home folder." },
-        task: { type: "string", description: "Exactly what to do, written out in full, e.g. \"Run git pull origin main and report what changed.\"" },
+        task: { type: "string", description: "Exactly what to do, written out in full, e.g. \"Run git pull origin main and report what changed.\" or \"Write a new blog post about KYC and use the attached images in it.\"" },
+        design_ids: { type: "array", items: { type: "string" }, description: "Pictures the Design agent made, to use in the work (a blog post, a page, the app): ids from list_designs, or \"latest\", \"latest:3\" for the newest three. The Developer downloads them into the project." },
       },
       required: ["project", "task"],
     },
@@ -544,6 +545,29 @@ function reportToText(r: Report): string {
 
 export type ToolRunResult = { text: string; pendingAction?: PendingAction; clientAction?: ClientAction };
 
+/**
+ * Designs handed to the Developer: their public links go into the task, with
+ * instructions to download them into the project and follow its conventions.
+ * "latest:3" means the newest three.
+ */
+function withDesigns(task: string, ids: unknown): string {
+  const wanted = Array.isArray(ids) ? ids.map(String).filter(Boolean) : [];
+  if (!wanted.length) return task;
+  const userId = currentUserOrThrow();
+  const picked: { url: string; prompt: string }[] = [];
+  for (const id of wanted) {
+    const many = /^latest:(\d+)$/.exec(id.trim());
+    if (many) picked.push(...listDesigns(userId, Math.min(Number(many[1]), 10)));
+    else picked.push(attachDesign(id)!);
+  }
+  const unique = [...new Map(picked.map(d => [d.url, d])).values()];
+  return `${task}
+
+Images to use (made by the Design agent; download each with curl, e.g. curl -fsSL -o <file> <url>, into the folder this project uses for this kind of content, with descriptive file names; then reference them, with good alt text):
+${unique.map((d, i) => `${i + 1}. ${d.url}: "${d.prompt}"`).join("\n")}
+Follow the project's own conventions for this (read CLAUDE.md, README and any brief or command for it first). Don't deploy or push unless the task says to; report the files you added and how to preview them.`;
+}
+
 /** The design a post should carry, by id or "latest"; errors say what to do instead. */
 function attachDesign(id: unknown) {
   if (typeof id !== "string" || !id.trim()) return null;
@@ -606,7 +630,7 @@ export async function executeTool(name: string, input: Record<string, unknown>):
     case "list_designs": {
       const designs = listDesigns(currentUserOrThrow());
       if (!designs.length) return { text: "No designs have been made yet. Ask the Design agent for one first." };
-      return { text: designs.map((d, i) => `${i === 0 ? "(latest) " : ""}id ${d.id} · ${new Date(d.createdAt).toLocaleString("en-GB")} · ${d.branded ? "with the brand logo · " : ""}"${d.prompt}"`).join("\n") };
+      return { text: designs.map((d, i) => `${i === 0 ? "(latest) " : ""}id ${d.id} · ${new Date(d.createdAt).toLocaleString("en-GB")} · ${d.branded ? "with the brand logo · " : ""}"${d.prompt}" · ${d.url}`).join("\n") };
     }
     case "propose_facebook_post": {
       const design = attachDesign(input.design_id);
@@ -765,6 +789,7 @@ export async function executeTool(name: string, input: Record<string, unknown>):
     }
 
     case "propose_developer_task": {
+      input.task = withDesigns(String(input.task ?? ""), input.design_ids);
       if (HOSTED) {
         const userId = currentUserOrThrow(), device = devComputer(userId);
         const project = await savedProjectPath(input.project as string);
