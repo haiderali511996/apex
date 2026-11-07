@@ -23,7 +23,7 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({ ok: true });
 }
 
-/** Sends Haider to Google's consent screen. */
+/** Sends the user to Google's consent screen. */
 export async function GET(req: NextRequest) {
   const guard = await requireUser();
   if ("response" in guard) return guard.response;

@@ -296,7 +296,7 @@ export const toolDefinitions: Anthropic.Tool[] = [
   /* ── Developer: Claude Code on this Mac ── */
   {
     name: "list_projects",
-    description: "List the code projects on the user's computer (hosted: the linked computer, through the desktop app), most recently active first: ones opened in Claude Code, plus project folders found in the home, Desktop, Documents, Downloads and code folders. Also says whether Claude Code is installed there. Call this when he asks what projects exist, or before ask_developer when unsure of a name.",
+    description: "List the code projects on the user's computer (hosted: the linked computer, through the desktop app), most recently active first: ones opened in Claude Code, plus project folders found in the home, Desktop, Documents, Downloads and code folders. Also says whether Claude Code is installed there. Call this when they ask what projects exist, or before ask_developer when unsure of a name.",
     input_schema: { type: "object", properties: {} },
   },
   {
@@ -305,7 +305,7 @@ export const toolDefinitions: Anthropic.Tool[] = [
     input_schema: {
       type: "object",
       properties: {
-        project: { type: "string", description: "Project name (as spoken is fine), or a folder path inside his home folder." },
+        project: { type: "string", description: "Project name (as spoken is fine), or a folder path inside their home folder." },
         task: { type: "string", description: "The question or task, written out in full for a developer who hasn't heard the conversation." },
       },
       required: ["project", "task"],
@@ -318,7 +318,7 @@ export const toolDefinitions: Anthropic.Tool[] = [
     input_schema: {
       type: "object",
       properties: {
-        project: { type: "string", description: "Project name (as spoken is fine), or a folder path inside his home folder." },
+        project: { type: "string", description: "Project name (as spoken is fine), or a folder path inside their home folder." },
         task: { type: "string", description: "Exactly what to do, written out in full, e.g. \"Run git pull origin main and report what changed.\"" },
       },
       required: ["project", "task"],
@@ -326,11 +326,11 @@ export const toolDefinitions: Anthropic.Tool[] = [
   },
   {
     name: "name_project",
-    description: "Save what Haider calls a project (e.g. \"Lifemed Live\", as pinned in his Claude app) and which folder it is, once he confirms it, so the name works directly next time.",
+    description: "Save what the user calls a project (e.g. \"Website Live\") and which folder it is, once they confirm it, so the name works directly next time.",
     input_schema: {
       type: "object",
       properties: {
-        name: { type: "string", description: "The name Haider uses." },
+        name: { type: "string", description: "The name the user uses." },
         folder: { type: "string", description: "The folder: a path, or a folder name from list_projects." },
       },
       required: ["name", "folder"],
@@ -338,7 +338,7 @@ export const toolDefinitions: Anthropic.Tool[] = [
   },
   {
     name: "search_claude_chats",
-    description: "Ask the Developer (Claude Code) about Haider's past Claude Code chats, across all projects: what was discussed, decided, built or left unfinished, and when. Use when he mentions a previous chat or session, or asks what he worked on. Read-only; can take a minute.",
+    description: "Ask the Developer (Claude Code) about the user's past Claude Code chats, across all projects: what was discussed, decided, built or left unfinished, and when. Use when they mention a previous chat or session, or asks what they worked on. Read-only; can take a minute.",
     input_schema: {
       type: "object",
       properties: { task: { type: "string", description: "What to find or summarize, written out in full." } },
@@ -346,15 +346,15 @@ export const toolDefinitions: Anthropic.Tool[] = [
     },
   },
 
-  /* ── Design: Gemini pictures, carried out on Haider's screen ── */
+  /* ── Design: Gemini pictures, carried out on the user's screen ── */
   {
     name: "design_picture",
-    description: "Hand a picture request to the Design agent on Haider's screen. With use_camera true, the deck takes a photo with his webcam right now and Design edits it per the instruction (leave the instruction empty to just take the photo). With use_camera false, Design makes a new picture from the instruction — a logo, poster, illustration. Use this whenever he asks for a photo, picture, selfie, image or design, in any wording or language — you do have a camera through this tool.",
+    description: "Hand a picture request to the Design agent on the user's screen. With use_camera true, the deck takes a photo with their webcam right now and Design edits it per the instruction (leave the instruction empty to just take the photo). With use_camera false, Design makes a new picture from the instruction — a logo, poster, illustration. Use this whenever they ask for a photo, picture, selfie, image or design, in any wording or language — you do have a camera through this tool.",
     input_schema: {
       type: "object",
       properties: {
         use_camera: { type: "boolean", description: "True to take a photo with the webcam first." },
-        instruction: { type: "string", description: "What Design should make or change, in his words. Empty to just take a photo." },
+        instruction: { type: "string", description: "What Design should make or change, in their words. Empty to just take a photo." },
       },
       required: ["use_camera", "instruction"],
     },
@@ -449,7 +449,7 @@ export const toolDefinitions: Anthropic.Tool[] = [
   },
   {
     name: "mac_list_apps",
-    description: "List the apps open on Haider's MacBook right now, and which one is in front.",
+    description: "List the apps open on this Mac right now, and which one is in front.",
     input_schema: { type: "object", properties: {} },
   },
   {
@@ -459,12 +459,12 @@ export const toolDefinitions: Anthropic.Tool[] = [
   },
   {
     name: "mac_list_chrome_profiles",
-    description: "List Haider's Chrome profiles with their names and email addresses. Several share a name (two \"Haider\", two \"Work\"), so check this before opening a profile he names loosely.",
+    description: "List the Chrome profiles with their names and email addresses. Several share a name (e.g. two with the same person's name), so check this before opening a profile named loosely.",
     input_schema: { type: "object", properties: {} },
   },
   {
     name: "mac_open_url",
-    description: "Open a website on the Mac. Give chrome_profile (its name or email) to open it in that Chrome profile — e.g. Gmail is https://mail.google.com in the profile whose inbox he wants. Without it, the site opens in the default browser.",
+    description: "Open a website on the Mac. Give chrome_profile (its name or email) to open it in that Chrome profile — e.g. Gmail is https://mail.google.com in the profile whose inbox they want. Without it, the site opens in the default browser.",
     input_schema: {
       type: "object",
       properties: {
@@ -497,22 +497,22 @@ export const toolDefinitions: Anthropic.Tool[] = [
   },
   {
     name: "propose_mac_quit_all_apps",
-    description: "Queue quitting every open app on the Mac (keeping Chrome and the editor/terminal Sarah runs in). Nothing happens until Haider approves it in the UI.",
+    description: "Queue quitting every open app on the Mac (keeping Chrome and the editor/terminal Sarah runs in). Nothing happens until the user approves it in the UI.",
     input_schema: { type: "object", properties: {} },
   },
   {
     name: "propose_mac_power",
-    description: "Queue restarting, shutting down or sleeping the Mac. Nothing happens until Haider approves it in the UI; on restart or shut down, apps are asked to quit first so unsaved work prompts to save.",
+    description: "Queue restarting, shutting down or sleeping the Mac. Nothing happens until the user approves it in the UI; on restart or shut down, apps are asked to quit first so unsaved work prompts to save.",
     input_schema: { type: "object", properties: { action: { type: "string", enum: ["restart", "shut down", "sleep"] } }, required: ["action"] },
   },
   {
     name: "propose_mac_quit_app",
-    description: "Queue quitting an app on the Mac. It may lose unsaved work, so nothing happens until Haider approves it in the UI.",
+    description: "Queue quitting an app on the Mac. It may lose unsaved work, so nothing happens until the user approves it in the UI.",
     input_schema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] },
   },
   {
     name: "propose_mac_applescript",
-    description: "For any other Mac task the tools above can't do (Finder, System Settings, Notes, Reminders, window layout, clicking in an app…): write an AppleScript that does it and queue it. Nothing runs until Haider reads and approves it in the UI. Keep the script short and focused on exactly what he asked. It must be real AppleScript, never a bare shell command (wrap any shell command in do shell script \"…\"). Never use this for specs, hardware or battery questions — mac_system_info answers those at once.",
+    description: "For any other Mac task the tools above can't do (Finder, System Settings, Notes, Reminders, window layout, clicking in an app…): write an AppleScript that does it and queue it. Nothing runs until the user reads and approves it in the UI. Keep the script short and focused on exactly what they asked. It must be real AppleScript, never a bare shell command (wrap any shell command in do shell script \"…\"). Never use this for specs, hardware or battery questions — mac_system_info answers those at once.",
     input_schema: {
       type: "object",
       properties: {
@@ -745,7 +745,7 @@ export async function executeTool(name: string, input: Record<string, unknown>):
         summary: `Claude Code in ${project.name} (${project.path.replace(/^\/Users\/[^/]+/, "~")}): ${task}`,
         payload: { path: project.path, task },
       });
-      return { text: `Task queued for Haider's approval (id ${action.id}). Nothing has run yet; Claude Code starts once he approves it.`, pendingAction: action };
+      return { text: `Task queued for approval (id ${action.id}). Nothing has run yet; Claude Code starts once it's approved.`, pendingAction: action };
     }
 
     case "computer_list": {
@@ -814,21 +814,21 @@ export async function executeTool(name: string, input: Record<string, unknown>):
       return { text: await controlMediaApps(input.action as "pause" | "play" | "status") };
     case "propose_mac_quit_all_apps": {
       const action = await createPendingAction({ platform: "mac", kind: "mac_quit_all_apps", summary: "Quit all open apps on the Mac (Chrome and the editor/terminal Sarah runs in stay open)", payload: {} });
-      return { text: `Queued for Haider's approval (id ${action.id}); nothing has been closed yet.`, pendingAction: action };
+      return { text: `Queued for approval (id ${action.id}); nothing has been closed yet.`, pendingAction: action };
     }
     case "propose_mac_power": {
       const what = input.action as "restart" | "shut down" | "sleep";
       if (!["restart", "shut down", "sleep"].includes(what)) return { text: "action must be restart, shut down or sleep." };
       const action = await createPendingAction({ platform: "mac", kind: "mac_power", summary: `${what[0].toUpperCase()}${what.slice(1)} the Mac`, payload: { action: what } });
-      return { text: `Queued for Haider's approval (id ${action.id}). The Mac won't ${what} until he approves.`, pendingAction: action };
+      return { text: `Queued for approval (id ${action.id}). The Mac won't ${what} until it's approved.`, pendingAction: action };
     }
     case "propose_mac_quit_app": {
       const action = await createPendingAction({ platform: "mac", kind: "mac_quit_app", summary: `Quit ${input.name} on the Mac`, payload: { name: input.name } });
-      return { text: `Queued for Haider's approval (id ${action.id}); ${input.name} stays open until he approves.`, pendingAction: action };
+      return { text: `Queued for approval (id ${action.id}); ${input.name} stays open until it's approved.`, pendingAction: action };
     }
     case "propose_mac_applescript": {
       const action = await createPendingAction({ platform: "mac", kind: "mac_applescript", summary: `On the Mac: ${input.purpose}\n\n${input.script}`, payload: { script: input.script } });
-      return { text: `Queued for Haider's approval (id ${action.id}). Nothing has run yet.`, pendingAction: action };
+      return { text: `Queued for approval (id ${action.id}). Nothing has run yet.`, pendingAction: action };
     }
 
     case "name_project":
@@ -852,7 +852,7 @@ export async function executeTool(name: string, input: Record<string, unknown>):
       const useCamera = input.use_camera === true;
       const instruction = String(input.instruction ?? "").trim();
       return {
-        text: `${useCamera ? "The deck is taking the photo now and Design will work on it" : "Design is making the picture now"}; the result appears on Haider's screen. Reply with one short line in his language, e.g. "On it — taking your photo now."`,
+        text: `${useCamera ? "The deck is taking the photo now and Design will work on it" : "Design is making the picture now"}; the result appears on the user's screen. Reply with one short line in their language, e.g. "On it — taking your photo now."`,
         clientAction: { type: "design_picture", useCamera, instruction },
       };
     }

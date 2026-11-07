@@ -25,7 +25,7 @@ type State = {
   actionLog: ActionLogEntry[];
   tiktokTokens?: TikTokTokens;
   memory: MemoryFact[];
-  /** What Haider calls a project ("Lifemed Live") → its folder, keyed by squashed name. */
+  /** What the user calls a project → its folder, keyed by squashed name. */
   projectNames?: Record<string, { name: string; path: string }>;
 };
 

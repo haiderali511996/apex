@@ -171,7 +171,7 @@ export default function SarahDeck() {
       const cmd = faceCommand(text);
       if (cmd === "show") {
         setFaceOpen(true);
-        return "Here I am, Haider.";
+        return persona.userName ? `Here I am, ${persona.userName}.` : "Here I am.";
       }
       if (cmd === "hide") {
         setFaceOpen(false);

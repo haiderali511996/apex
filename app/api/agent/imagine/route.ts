@@ -13,7 +13,7 @@ function parseDataUrl(input: string): { mimeType: string; data: string } | null 
   return m ? { mimeType: m[1], data: m[2] } : null;
 }
 
-/** Edits a camera photo — or makes a new picture — from Haider's instruction. */
+/** Edits a camera photo — or makes a new picture — from the user's instruction. */
 export async function POST(req: NextRequest) {
   const guard = await requireUser({ plan: true });
   if ("response" in guard) return guard.response;
