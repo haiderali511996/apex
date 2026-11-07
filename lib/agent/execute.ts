@@ -48,7 +48,7 @@ export async function runPendingAction(action: PendingAction): Promise<string> {
         // Approvals live in each account's own store; this is a second lock.
         if (userId !== currentUserId()) throw new Error("This action belongs to another account.");
         // A restart may cut the connection before the answer comes back.
-        result = await runOnDevice(userId, deviceId, what, args, what === "power" ? 15_000 : 60_000).catch(err => {
+        result = await runOnDevice(userId, deviceId, what, args, what === "power" ? 15_000 : what === "dev_task" ? 11 * 60_000 : 60_000).catch(err => {
           if (what === "power") return "Sent to the computer.";
           throw err;
         });

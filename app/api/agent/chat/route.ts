@@ -9,6 +9,7 @@ import type { ClientAction, PendingAction } from "@/lib/agent/types";
 import { requireUser } from "@/lib/auth";
 import type { Persona } from "@/lib/persona";
 import { enterUser } from "@/lib/credentials";
+import { learnFromTurn, logTurn, memoryBrief } from "@/lib/memory";
 
 export const runtime = "nodejs";
 
@@ -85,11 +86,12 @@ function ownerPrompt(persona: Persona) {
 }
 
 /**
- * Tools that act on the computer this server runs on — Mac control, Claude
- * Code, local project folders. For customers that computer isn't theirs, so
- * these stay with the owner until the desktop app connects their own machine.
+ * Tools that control the Mac this server runs on. Hosted, that's the server,
+ * so they're left out; the computer_* tools reach the user's own computer
+ * through the desktop app instead. The Developer tools (Claude Code) stay:
+ * hosted, they run on the linked computer through the desktop app.
  */
-const LOCAL_TOOL = (name: string) => /^(propose_)?mac_|^(list_projects|ask_developer|propose_developer_task|name_project|search_claude_chats)$/.test(name);
+const LOCAL_TOOL = (name: string) => /^(propose_)?mac_/.test(name);
 /** Only when the server is the owner's own Mac do those tools reach the owner's computer; hosted, they'd act on the server. */
 const SERVER_IS_OWNERS_MAC = process.platform === "darwin";
 
@@ -100,6 +102,8 @@ function customerPrompt(persona: Persona) {
 Use web_search for anything current or factual you aren't sure of (news, prices, exchange rates, sports, people, places) instead of guessing. Use your tools for their Search Console, Google (Gmail, Calendar, Drive, Analytics, YouTube), Facebook, Instagram, X, TikTok, and their money: Stripe, PayPal and their bank account (Wise) — all read-only, you can never move money. If a tool says an account isn't configured, tell them to connect it on the Connections page — never pretend to have data. Anything that posts, sends or changes something is queued for their approval.
 Pictures: design_picture makes them, and each is saved. To post one, use the propose_* post tools with design_id "latest" (or an id from list_designs); post designs automatically carry their uploaded brand logo (Account page → Your brand logo), so never ask the image model to draw a logo.
 To act on their computer (open apps or websites, switch Chrome profiles, list what's open, volume, music, quitting apps, restarting) use the computer_* tools; they reach the computer they linked with the desktop app. If none is linked or it's offline, tell them to link it on the Account page.
+Developer: their developer is Claude Code, running on their linked computer through the desktop app — never ask for a developer's name or contact details. "Line up / ask / tell the developer" means these tools: list_projects (their code projects), ask_developer (questions about a project's code, read-only, answers at once), propose_developer_task (changes, git, tests, fixes — runs after they approve), search_claude_chats (what was done in past Claude Code chats). If the computer is offline or Claude Code isn't installed there, say exactly that.
+Memory: you remember earlier conversations — your memory is below, and the recent conversation is included. Notes are taken automatically; use remember for anything they explicitly ask you to keep, and recall to search it.
 
 ${style}`;
 }
@@ -150,9 +154,17 @@ export async function POST(req: NextRequest) {
   if (BACKEND === "gemini" || !isOwner) {
     try {
       const local = isOwner && SERVER_IS_OWNERS_MAC;
-      const result = await runViaGemini(messages, (local ? ownerPrompt(persona) : customerPrompt(persona)) + whereAndWhen(context), local ? {} : { exclude: LOCAL_TOOL });
+      const said = String(messages.at(-1)?.content ?? "");
+      // The last 30 messages are plenty of context; older ones live on in memory.
+      const recent = messages.slice(-30);
+      const brief = await memoryBrief(user.id, persona.userName).catch(() => "");
+      const result = await runViaGemini(recent, (local ? ownerPrompt(persona) : customerPrompt(persona)) + brief + whereAndWhen(context), local ? {} : { exclude: LOCAL_TOOL });
       // One line per turn in the dev server log, for tuning the prompt.
-      console.log(`[turn] ${user.email} said: ${JSON.stringify(messages.at(-1)?.content ?? "")}\n[turn] ${persona.name}: ${JSON.stringify(result.reply)}`);
+      console.log(`[turn] ${user.email} said: ${JSON.stringify(said)}\n[turn] ${persona.name}: ${JSON.stringify(result.reply)}`);
+      // Saved for the next visit, and learned from in the background.
+      logTurn(user.id, "user", said);
+      logTurn(user.id, "assistant", result.reply ?? "");
+      void learnFromTurn(user.id, said, result.reply ?? "");
       return NextResponse.json(result);
     } catch (error) {
       console.warn(`[turn] you: ${JSON.stringify(messages.at(-1)?.content ?? "")} -> error: ${error instanceof Error ? error.message : error}`);

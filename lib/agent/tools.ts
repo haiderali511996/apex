@@ -4,13 +4,14 @@ import {
   workspace, crm, finance, paypal, bank, analytics,
   allConnectorStatuses,
 } from "./connectors";
-import { createPendingAction, listPendingActions, listActionLog, rememberFact, recallFacts } from "./store";
+import { createPendingAction, listPendingActions, listActionLog, getProjectNames, saveProjectName } from "./store";
 import { askSpecialist } from "./specialist";
 import { SPECIALISTS, specialistKeys } from "./roles";
 import { askAboutChats, askDeveloper, listProjects, nameProject, resolveProject } from "./developer";
 import { isOnline, listDevices, pickDevice, runOnDevice } from "@/lib/devices";
 import { currentUserId } from "@/lib/credentials";
 import { findDesign, listDesigns } from "@/lib/designs";
+import { addMemory, CATEGORIES, deleteMemory, recentTurns, searchMemories, type Category } from "@/lib/memory";
 import { controlMediaApps, focusChromeTab, systemInfo, listChromeProfiles, listChromeTabs, listRunningApps, openApp, openUrl, setVolume } from "./mac";
 import type { ClientAction, PendingAction, Report } from "./types";
 import { searchWeb } from "./gemini";
@@ -271,30 +272,35 @@ export const toolDefinitions: Anthropic.Tool[] = [
     input_schema: {
       type: "object",
       properties: {
-        topic: { type: "string", description: "Short subject, e.g. a client or project name." },
-        fact: { type: "string", description: "The thing to remember." },
+        category: { type: "string", enum: ["profile", "preference", "project", "connection", "decision", "asset", "person", "task", "work"], description: "What kind of fact it is." },
+        fact: { type: "string", description: "The thing to remember, as one self-contained sentence." },
       },
-      required: ["topic", "fact"],
+      required: ["fact"],
     },
   },
   {
     name: "recall",
-    description: "Look up previously stored facts. Call this when the user references past decisions, clients or history.",
+    description: "Search your long-term memory (facts noted from all earlier conversations) and the saved conversation. Call this when the user references past work, decisions, clients, designs or anything you should know but don't see in your memory brief.",
     input_schema: {
       type: "object",
-      properties: { query: { type: "string", description: "Optional filter. Omit to list everything remembered." } },
+      properties: { query: { type: "string", description: "Words to look for. Omit to list the most recent facts." } },
     },
+  },
+  {
+    name: "forget",
+    description: "Delete facts from memory that the user says are wrong or wants forgotten. Pass words that identify them; it removes the matching facts and says which.",
+    input_schema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
   },
 
   /* ── Developer: Claude Code on this Mac ── */
   {
     name: "list_projects",
-    description: "List the code projects on this Mac, most recently active first: ones Haider has opened in Claude Code, plus project folders found in his home, Desktop, Documents, Downloads and code folders. Call this when he asks what projects exist, or before ask_developer when unsure of a name.",
+    description: "List the code projects on the user's computer (hosted: the linked computer, through the desktop app), most recently active first: ones opened in Claude Code, plus project folders found in the home, Desktop, Documents, Downloads and code folders. Also says whether Claude Code is installed there. Call this when he asks what projects exist, or before ask_developer when unsure of a name.",
     input_schema: { type: "object", properties: {} },
   },
   {
     name: "ask_developer",
-    description: "Hand a question about one of the user's code projects to the Developer agent — Claude Code running on this Mac. It reads and searches the project's files and answers: what a project does, where something is implemented, how a feature works, what's unfinished, or a code review. It cannot change files. It can take a minute, so tell the user you're checking first.",
+    description: "Hand a question about one of the user's code projects to the Developer agent — Claude Code running on the user's computer. It reads and searches the project's files and answers: what a project does, where something is implemented, how a feature works, what's unfinished, or a code review. It cannot change files. It can take a minute, so tell the user you're checking first.",
     input_schema: {
       type: "object",
       properties: {
@@ -307,7 +313,7 @@ export const toolDefinitions: Anthropic.Tool[] = [
 
   {
     name: "propose_developer_task",
-    description: "Queue a task for the Developer (Claude Code on this Mac) that runs terminal commands or changes files in a project — git pull, installing dependencies, running tests or the build, fixing a bug, making an edit. Nothing runs until Haider approves it in the UI; then Claude Code does it with the terminal and reports back. Use this instead of telling Haider to run commands himself.",
+    description: "Queue a task for the Developer (Claude Code on the user's computer) that runs terminal commands or changes files in a project — git pull, installing dependencies, running tests or the build, fixing a bug, making an edit. Nothing runs until the user approves it in the UI; then Claude Code does it with the terminal and reports back. Use this instead of telling the user to run commands themselves.",
     input_schema: {
       type: "object",
       properties: {
@@ -521,6 +527,34 @@ function attachDesign(id: unknown) {
   return design;
 }
 
+/**
+ * Hosted (not on the owner's Mac), the Developer is the Claude Code on the
+ * user's own computer, reached through the desktop app. A named computer wins;
+ * otherwise an online Mac, then any online computer.
+ */
+const HOSTED = process.platform !== "darwin";
+function devComputer(userId: string, name?: string) {
+  if (name) return pickDevice(userId, name);
+  const online = listDevices(userId).filter(isOnline);
+  const chosen = online.find(d => d.os === "macOS") ?? online[0];
+  if (chosen) return chosen;
+  const linked = listDevices(userId);
+  throw new Error(linked.length
+    ? `The Developer (Claude Code) runs on your computer, and none is online: start the UNC Assistant desktop app on ${linked.map(d => d.name).join(" or ")}.`
+    : "The Developer (Claude Code) runs on your computer through the desktop app. Install it from the Download page and sign in, then ask again.");
+}
+async function devComputerName() { return devComputer(currentUserOrThrow()).name; }
+function onDevComputer(action: string, args: Record<string, unknown>, timeoutMs: number) {
+  const userId = currentUserOrThrow();
+  return runOnDevice(userId, devComputer(userId).id, action, args, timeoutMs);
+}
+const squashName = (s: string) => String(s).toLowerCase().replace(/[^a-z0-9]/g, "");
+/** A project name the user taught Sarah turns into its folder; anything else goes to the computer as said. */
+async function savedProjectPath(name: string) {
+  const saved = (await getProjectNames())[squashName(name)];
+  return saved?.path ?? name;
+}
+
 function currentUserOrThrow(): string {
   const id = currentUserId();
   if (!id) throw new Error("No signed-in account for this request.");
@@ -656,21 +690,38 @@ export async function executeTool(name: string, input: Record<string, unknown>):
       return { text: reportToText(await analytics.getTrafficReport((input.days as number) || 28)) };
 
     case "remember": {
-      const entry = await rememberFact(input.topic as string, input.fact as string);
-      return { text: `Remembered under "${entry.topic}".` };
+      const category = (CATEGORIES as readonly string[]).includes(input.category as string) ? input.category as Category : "work";
+      const fact = [input.topic, input.fact].filter(Boolean).join(": ");
+      const saved = addMemory(currentUserOrThrow(), category, fact, "user");
+      return { text: saved ? "Remembered." : "Not saved: it looked like a password or key, which are never kept in memory." };
     }
     case "recall": {
-      const facts = await recallFacts(input.query as string | undefined);
-      if (!facts.length) return { text: "Nothing remembered on that yet." };
-      return { text: facts.map((f) => `[${f.topic}] ${f.fact} (noted ${f.at.slice(0, 10)})`).join("\n") };
+      const userId = currentUserOrThrow();
+      const facts = await searchMemories(userId, input.query as string | undefined);
+      const q = String(input.query ?? "").toLowerCase().split(/\W+/).filter(w => w.length > 2);
+      const said = q.length ? recentTurns(userId, 400).filter(t => q.some(w => t.content.toLowerCase().includes(w))).slice(-8) : [];
+      if (!facts.length && !said.length) return { text: "Nothing in memory about that." };
+      return { text: [
+        ...facts.map(f => `[${f.category}] ${f.fact} (${f.updatedAt.slice(0, 10)})`),
+        ...(said.length ? ["", "From earlier conversation:", ...said.map(t => `${t.at.slice(0, 10)} ${t.role === "user" ? "User" : "You"}: ${t.content.slice(0, 300)}`)] : []),
+      ].join("\n") };
+    }
+    case "forget": {
+      const userId = currentUserOrThrow();
+      const matches = await searchMemories(userId, String(input.query ?? ""));
+      if (!input.query || !matches.length) return { text: "Nothing in memory matched that." };
+      for (const m of matches) deleteMemory(userId, m.id);
+      return { text: `Forgot ${matches.length}: ${matches.map(m => m.fact).join(" | ")}` };
     }
 
     case "list_projects": {
+      if (HOSTED) return { text: await onDevComputer("dev_projects", {}, 60_000) };
       const projects = await listProjects();
       if (!projects.length) return { text: "Claude Code hasn't been used in any project on this Mac yet." };
       return { text: projects.map((p) => `${p.name} — ${p.path} (${p.source === "claude-code" ? "opened in Claude Code" : "found on this Mac"}, last active ${p.lastActive.slice(0, 10)})`).join("\n") };
     }
     case "ask_developer": {
+      if (HOSTED) return { text: `Developer (Claude Code) on ${await devComputerName()}: ${await onDevComputer("dev_ask", { project: await savedProjectPath(input.project as string), task: input.task }, 5 * 60_000)}` };
       const project = await resolveProject(input.project as string);
       if ("error" in project) return { text: project.error };
       const answer = await askDeveloper(project, input.task as string);
@@ -679,6 +730,12 @@ export async function executeTool(name: string, input: Record<string, unknown>):
     }
 
     case "propose_developer_task": {
+      if (HOSTED) {
+        const userId = currentUserOrThrow(), device = devComputer(userId);
+        const project = await savedProjectPath(input.project as string);
+        const pending = await createPendingAction({ platform: "computer", kind: "device_command", summary: `Claude Code on ${device.name}, in ${project}: ${input.task}`, payload: { userId, deviceId: device.id, action: "dev_task", args: { project, task: input.task } } });
+        return { text: `Task queued for approval (id ${pending.id}). Nothing has run yet; Claude Code on ${device.name} starts once it's approved.`, pendingAction: pending };
+      }
       const project = await resolveProject(input.project as string);
       if ("error" in project) return { text: project.error };
       const task = input.task as string;
@@ -775,9 +832,16 @@ export async function executeTool(name: string, input: Record<string, unknown>):
     }
 
     case "name_project":
+      if (HOSTED) {
+        const folder = String(input.folder || "").trim();
+        if (!folder) return { text: "Which folder is it?" };
+        await saveProjectName(squashName(input.name as string), input.name as string, folder);
+        return { text: `Saved: "${input.name}" is ${folder}.` };
+      }
       return { text: await nameProject(input.name as string, input.folder as string) };
 
     case "search_claude_chats": {
+      if (HOSTED) return { text: `Developer (Claude Code) on past chats, on ${await devComputerName()}:\n${await onDevComputer("dev_chats", { task: input.task }, 5 * 60_000)}` };
       const answer = await askAboutChats(input.task as string);
       return { text: `Developer (Claude Code) on past chats:\n${answer}` };
     }

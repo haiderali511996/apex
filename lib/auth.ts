@@ -89,6 +89,12 @@ export async function currentUser(): Promise<User | null> {
   return { id: row.id, email: row.email, displayName: row.display_name, role: row.role };
 }
 
+/** An account by id, for requests signed by a linked computer rather than a browser session. */
+export function getUserById(id: string): User | null {
+  const row = database().prepare("SELECT id, email, display_name, role FROM users WHERE id = ?").get(id) as { id: string; email: string; display_name: string; role: User["role"] } | undefined;
+  return row ? { id: row.id, email: row.email, displayName: row.display_name, role: row.role } : null;
+}
+
 export function getPersona(user: User): Persona {
   const row = database().prepare("SELECT assistant_name, face, voice FROM settings WHERE user_id = ?").get(user.id) as
     { assistant_name: string; face: Face; voice: VoiceGender } | undefined;

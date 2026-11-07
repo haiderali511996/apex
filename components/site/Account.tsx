@@ -180,6 +180,7 @@ export default function Account() {
       <button type="button" className="btn btn-ghost btn-small" style={{ justifySelf: "start" }} onClick={async () => { await fetch("/api/auth/logout", { method: "POST" }); window.location.href = "/welcome"; }}>Log out</button>
 
       <Computers />
+      <MemoryBank />
       <BrandLogo />
       <Music />
 
@@ -263,6 +264,61 @@ function Computers() {
 }
 
 type MusicTrack = { id: string; name: string; size: number };
+
+type MemoryItem = { id: string; category: string; fact: string; source: "auto" | "user"; updatedAt: string };
+const MEMORY_GROUPS: [string, string][] = [["preference", "Your rules and preferences"], ["profile", "About you"], ["project", "Projects"], ["connection", "Connected accounts and computers"], ["asset", "Designs, logos and files"], ["decision", "Decisions"], ["person", "People and companies"], ["task", "Open tasks"], ["work", "Work done together"]];
+
+/** What the assistant remembers between conversations, which the account can read, add to and prune. */
+function MemoryBank() {
+  const [items, setItems] = useState<MemoryItem[] | null>(null);
+  const [draft, setDraft] = useState("");
+  const [note, setNote] = useState("");
+  useEffect(() => { void fetch("/api/memory").then(r => r.ok ? r.json() : null).then(b => b && setItems(b.memories)); }, []);
+  const call = async (init: RequestInit, query = "") => {
+    const res = await fetch(`/api/memory${query}`, init).catch(() => null);
+    const body = res ? await res.json().catch(() => ({})) : {};
+    if (body.memories) setItems(body.memories);
+    setNote(res?.ok ? "" : body.error || "Couldn't save — check your connection.");
+    return !!res?.ok;
+  };
+  const add = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (draft.trim() && await call({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ fact: draft }) })) setDraft("");
+  };
+  const clearChat = async () => {
+    if (!confirm("Clear the saved conversation? What's remembered below stays.")) return;
+    await fetch("/api/agent/history", { method: "DELETE" });
+    setNote("Conversation cleared.");
+  };
+  return (
+    <section className="card" style={{ padding: 24 }}>
+      <h3 style={{ fontSize: 18 }}>Memory</h3>
+      <p style={{ marginBottom: 14 }}>Your assistant notes what matters after each conversation (projects, connections, decisions, designs, your rules) and starts every chat knowing it. Your conversation is saved too, so it continues on any device. The desktop app keeps a copy on your computer in <b>Documents/UNC Assistant/memory.md</b>. Passwords and keys are never kept.</p>
+      <form onSubmit={add} style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+        <input value={draft} onChange={e => setDraft(e.target.value)} placeholder="Add something to always remember, e.g. Always use my UNC logo unchanged" style={{ flex: "1 1 240px", minWidth: 0 }} />
+        <button className="btn btn-primary btn-small" type="submit" disabled={!draft.trim()}>Remember</button>
+      </form>
+      {items === null ? <p style={{ color: "var(--muted)" }}>Loading…</p> : !items.length ? <p style={{ color: "var(--muted)" }}>Nothing yet. Talk to your assistant and it will start remembering.</p> :
+        <div style={{ display: "grid", gap: 16 }}>
+          {MEMORY_GROUPS.map(([key, title]) => {
+            const group = items.filter(i => i.category === key);
+            if (!group.length) return null;
+            return <div key={key}>
+              <b style={{ color: "var(--text)", fontSize: 14 }}>{title} <span style={{ color: "var(--muted)", fontWeight: 400 }}>({group.length})</span></b>
+              <div style={{ display: "grid", gap: 6, marginTop: 8 }}>
+                {group.map(m => <div key={m.id} style={{ display: "flex", gap: 10, alignItems: "flex-start", justifyContent: "space-between", border: "1px solid var(--line)", borderRadius: 10, padding: "8px 12px" }}>
+                  <span style={{ minWidth: 0, overflowWrap: "anywhere" }}>{m.fact} <span style={{ color: "var(--muted)", fontSize: 12 }}>· {m.updatedAt.slice(0, 10)}{m.source === "user" ? " · added by you" : ""}</span></span>
+                  <button type="button" className="btn btn-ghost btn-small" aria-label={`Forget: ${m.fact}`} onClick={() => call({ method: "DELETE" }, `?id=${encodeURIComponent(m.id)}`)}>Forget</button>
+                </div>)}
+              </div>
+            </div>;
+          })}
+        </div>}
+      <button type="button" className="btn btn-ghost btn-small" style={{ marginTop: 16 }} onClick={clearChat}>Clear saved conversation</button>
+      {note && <p className={note === "Conversation cleared." ? "form-ok" : "form-error"} style={{ marginTop: 8 }}>{note}</p>}
+    </section>
+  );
+}
 
 /** The logo stamped onto post designs, exactly as uploaded. */
 function BrandLogo() {

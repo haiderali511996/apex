@@ -12,9 +12,9 @@
  * scripts are only ever sent after you approve them in the app.
  */
 
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { readFile, writeFile, rm } from "node:fs/promises";
+import { readFile, writeFile, rm, readdir, stat, open as openFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -68,6 +68,142 @@ function chromeBinary() {
 }
 
 // ── Actions ──
+
+// ── Developer: Claude Code on this computer ──
+// Sarah's Developer agent is the Claude Code installed here. Questions are
+// read-only (Read, Glob, Grep). Tasks that change files or run commands only
+// arrive after the user approved them in the app. It runs on the user's own
+// Claude Code login; any API key in the environment is withheld.
+
+const HOME = os.homedir();
+const CLAUDE_PROJECTS = path.join(HOME, ".claude", "projects");
+const SEARCH_ROOTS = ["", "Desktop", "Documents", "Downloads", "Projects", "projects", "Developer", "code", "Code", "dev", "src", "repos", "GitHub", "workspace", "source/repos"];
+const SKIP = new Set(["Library", "Applications", "Movies", "Music", "Pictures", "Public", "node_modules", "dist", "build", "vendor", "Pods", "AppData"]);
+const MARKERS = [".git", "package.json", "pyproject.toml", "requirements.txt", "Cargo.toml", "go.mod", "pubspec.yaml", "Gemfile", "composer.json", "pom.xml", "build.gradle", "CLAUDE.md"];
+const squash = (s) => String(s).toLowerCase().replace(/[^a-z0-9]/g, "");
+
+/** The Claude Code program: on the PATH, a standard install, or the one inside the VS Code / Cursor extension. */
+async function claudeBinary() {
+  const exe = PLATFORM === "win32" ? "claude.exe" : "claude";
+  const found = [];
+  if (process.env.CLAUDE_PATH) found.push(process.env.CLAUDE_PATH);
+  // Apps opened from the Dock or Start menu don't get the terminal's PATH, so ask a login shell.
+  if (PLATFORM === "win32") found.push(...(await sh("where.exe", ["claude"]).then(t => t.split(/\r?\n/), () => [])));
+  else found.push(await sh(process.env.SHELL || "/bin/zsh", ["-lc", "command -v claude"]).catch(() => ""));
+  found.push(path.join(HOME, ".local", "bin", exe), path.join(HOME, ".claude", "local", exe), "/opt/homebrew/bin/claude", "/usr/local/bin/claude");
+  if (PLATFORM === "win32") found.push(path.join(process.env.APPDATA || "", "npm", "claude.cmd"));
+  for (const dir of [".vscode", ".vscode-insiders", ".cursor", ".windsurf"]) {
+    const ext = path.join(HOME, dir, "extensions");
+    const installs = await readdir(ext).then(d => d.filter(n => n.startsWith("anthropic.claude-code-")).sort().reverse(), () => []);
+    for (const i of installs) found.push(path.join(ext, i, "resources", "native-binary", exe));
+  }
+  return found.map(f => f && f.trim()).find(f => f && existsSync(f)) || null;
+}
+
+/** The working folder recorded near the top of a Claude Code session log. */
+async function sessionCwd(file) {
+  const handle = await openFile(file, "r");
+  try {
+    const buffer = Buffer.alloc(64 * 1024);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    const m = buffer.toString("utf8", 0, bytesRead).match(/"cwd":"((?:[^"\\]|\\.)*)"/);
+    return m ? JSON.parse(`"${m[1]}"`) : null;
+  } finally { await handle.close(); }
+}
+
+async function asProject(dir) {
+  if (!MARKERS.some(m => existsSync(path.join(dir, m)))) return null;
+  const times = await Promise.all([dir, path.join(dir, ".git", "index"), path.join(dir, ".git", "HEAD")].map(f => stat(f).then(s => s.mtimeMs, () => 0)));
+  return { name: path.basename(dir), path: dir, lastActive: Math.max(...times), claude: false };
+}
+
+/** Code projects here, most recently active first: the ones Claude Code worked in, plus project folders in the usual places. */
+async function codeProjects() {
+  const found = new Map();
+  const visit = async (dir, depth) => {
+    const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+    for (const e of entries) {
+      if (!e.isDirectory() || e.name.startsWith(".") || SKIP.has(e.name)) continue;
+      const full = path.join(dir, e.name);
+      const project = await asProject(full);
+      if (project) found.set(full, project);
+      else if (depth > 1) await visit(full, depth - 1);
+    }
+  };
+  for (const root of SEARCH_ROOTS) {
+    const dir = path.join(HOME, root);
+    if (existsSync(dir)) await visit(dir, root ? 2 : 1);
+  }
+  for (const d of await readdir(CLAUDE_PROJECTS).catch(() => [])) {
+    const full = path.join(CLAUDE_PROJECTS, d);
+    const sessions = await readdir(full).then(f => f.filter(n => n.endsWith(".jsonl")), () => []);
+    const dated = await Promise.all(sessions.map(async f => ({ file: path.join(full, f), t: await stat(path.join(full, f)).then(s => s.mtimeMs, () => 0) })));
+    dated.sort((a, b) => b.t - a.t);
+    for (const s of dated.slice(0, 3)) {
+      const cwd = await sessionCwd(s.file).catch(() => null);
+      if (!cwd || !existsSync(cwd) || cwd.startsWith(path.join(HOME, ".claude"))) continue;
+      const prior = found.get(cwd);
+      found.set(cwd, { name: path.basename(cwd), path: cwd, lastActive: Math.max(s.t, prior?.lastActive ?? 0), claude: true });
+      break;
+    }
+  }
+  return [...found.values()].sort((a, b) => b.lastActive - a.lastActive);
+}
+
+const tilde = (p) => p.startsWith(HOME) ? `~${p.slice(HOME.length)}` : p;
+
+/** A project by folder path or (part of) its name; the error lists what exists. */
+async function findProject(wanted) {
+  const asked = String(wanted || "").trim().replace(/^~(?=[\\/]|$)/, HOME);
+  if (!asked) throw new Error("Which project?");
+  if (path.isAbsolute(asked)) {
+    const full = path.resolve(asked);
+    const inside = path.relative(HOME, full);
+    if (inside.startsWith("..") || inside.split(path.sep).some(part => part.startsWith("."))) throw new Error("Only project folders inside the home folder can be opened.");
+    if (!existsSync(full)) throw new Error(`There's no folder at ${tilde(full)}.`);
+    return { name: path.basename(full), path: full };
+  }
+  const projects = await codeProjects();
+  const key = squash(asked);
+  const words = asked.toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length > 2);
+  const exact = projects.filter(p => squash(p.name) === key);
+  const partial = projects.filter(p => { const n = squash(p.name); return n.length > 2 && (n.includes(key) || key.includes(n)); });
+  const sharing = projects.filter(p => words.some(w => squash(p.name).includes(w)));
+  const matches = exact.length ? exact : partial.length ? partial : sharing;
+  if (!matches.length) throw new Error(`No project called "${wanted}" on ${os.hostname()}. Found: ${projects.slice(0, 15).map(p => p.name).join(", ") || "none"}. Give the folder path if it's elsewhere.`);
+  if (new Set(matches.map(p => squash(p.name))).size > 1) throw new Error(`"${wanted}" could be ${matches.slice(0, 8).map(p => `${p.name} (${tilde(p.path)})`).join(", ")}. Which one?`);
+  return matches[0];
+}
+
+/** Runs Claude Code in a folder with a prompt on stdin (no shell quoting involved) and returns its answer. */
+async function runClaude(cwd, prompt, tools, act, timeoutMs) {
+  const bin = await claudeBinary();
+  if (!bin) throw new Error(`Claude Code isn't installed on ${os.hostname()}. Install it from https://claude.com/claude-code, sign in once by running "claude" in a terminal, then ask again.`);
+  const env = { ...process.env };
+  delete env.ANTHROPIC_API_KEY;
+  const args = ["-p", "--output-format", "text", "--allowedTools", tools.join(","), ...(act ? ["--permission-mode", "acceptEdits"] : [])];
+  return new Promise((resolve, reject) => {
+    const child = spawn(bin, args, { cwd, env, windowsHide: true, shell: /\.cmd$/i.test(bin) });
+    let out = "", err = "";
+    const timer = setTimeout(() => { child.kill(); reject(new Error(`Claude Code took longer than ${Math.round(timeoutMs / 60000)} minutes and was stopped.`)); }, timeoutMs);
+    child.stdout.on("data", d => { out += d; });
+    child.stderr.on("data", d => { err += d; });
+    child.on("error", e => { clearTimeout(timer); reject(e); });
+    child.on("close", code => {
+      clearTimeout(timer);
+      const text = out.trim();
+      if (code === 0 && text) return resolve(text.length > 7000 ? `${text.slice(0, 7000)}\n…(cut short)` : text);
+      const why = (err || text).trim();
+      reject(new Error(/login|log in|authenticate|api key/i.test(why) ? `Claude Code on ${os.hostname()} isn't signed in. Run "claude" in a terminal once and sign in.` : `Claude Code stopped: ${why.slice(0, 600) || `exit code ${code}`}`));
+    });
+    child.stdin.end(prompt);
+  });
+}
+
+const DEV_BRIEF = "You are the Developer agent inside the user's voice assistant, which relays your answer, often aloud. Answer directly and concisely, naming files as path:line.";
+const ASK_BRIEF = `${DEV_BRIEF} You can read and search this project but not change it; if asked to change something, explain exactly what you would change and where. Read CLAUDE.md or README first when it helps.`;
+const CHATS_BRIEF = `${DEV_BRIEF} This folder is Claude Code's chat history: each subfolder is a project (its path with / turned into -), each .jsonl file one chat, each line a JSON event with a timestamp ("type":"user" lines are the user's messages). Files can be large: Grep first, then Read only what's relevant. Say which project and date each finding is from. Never repeat keys, tokens or passwords.`;
+const TASK_BRIEF = `${DEV_BRIEF} The user approved this exact task; do it now in this project with the terminal and file tools. Do only what it asks. Don't push, force-push, delete branches, deploy, or remove files beyond the task unless it says so. If something could lose work (uncommitted changes in the way, conflicts, a failing migration), stop and report instead of forcing it. Finish with a short report: first sentence says what happened, then the commands you ran.`;
 
 export const ACTIONS = {
   async open_app({ name }) {
@@ -222,6 +358,31 @@ if (-not $b) { "Battery: none (desktop computer)" } else {
       : await sh(PLATFORM === "darwin" ? "/bin/zsh" : "bash", ["-c", script], 60_000);
     return out ? `Done. Output: ${out.slice(0, 2000)}` : "Done.";
   },
+
+  // ── Developer (Claude Code) ──
+  async dev_projects() {
+    const projects = await codeProjects();
+    const bin = await claudeBinary();
+    const head = bin ? `Claude Code is installed (${tilde(bin)}).` : "Claude Code isn't installed here yet (https://claude.com/claude-code).";
+    if (!projects.length) return `${head}\nNo code projects found in the usual folders.`;
+    return `${head}\n${projects.slice(0, 40).map(p => `${p.name} — ${tilde(p.path)}${p.claude ? " (worked on in Claude Code)" : ""}, last active ${new Date(p.lastActive).toISOString().slice(0, 10)}`).join("\n")}`;
+  },
+
+  async dev_ask({ project, task }) {
+    const p = await findProject(project);
+    return `${p.name} (${tilde(p.path)}):\n${await runClaude(p.path, `${ASK_BRIEF}\n\nQuestion: ${task}`, ["Read", "Glob", "Grep"], false, 4 * 60_000)}`;
+  },
+
+  async dev_chats({ task }) {
+    if (!existsSync(CLAUDE_PROJECTS)) return "There are no saved Claude Code chats on this computer yet.";
+    return runClaude(CLAUDE_PROJECTS, `${CHATS_BRIEF}\n\nQuestion: ${task}`, ["Read", "Glob", "Grep"], false, 4 * 60_000);
+  },
+
+  // Sent only after the user approved this exact task in the app.
+  async dev_task({ project, task }) {
+    const p = await findProject(project);
+    return `${p.name} (${tilde(p.path)}):\n${await runClaude(p.path, `${TASK_BRIEF}\n\nTask: ${task}`, ["Bash", "Read", "Edit", "Write", "Glob", "Grep", "WebFetch", "WebSearch", "TodoWrite"], true, 10 * 60_000)}`;
+  },
 };
 
 // ── Battery (part of system_info) ──
@@ -283,16 +444,17 @@ async function work() {
       if (res.status === 401) throw Object.assign(new Error("This computer was unlinked from the account. Pair it again."), { fatal: true });
       const { commands = [] } = await res.json();
       backoff = 1000;
-      for (const cmd of commands) {
+      // Each command runs on its own, so a long Claude Code task doesn't stop the polling.
+      for (const cmd of commands) void (async () => {
         let ok = true, output;
         try {
           const action = ACTIONS[cmd.action];
           if (!action) throw new Error(`Unknown action ${cmd.action}.`);
-          output = await action(cmd.args || {});
+          output = String(await action(cmd.args || {}));
         } catch (err) { ok = false; output = err instanceof Error ? err.message : String(err); }
         console.log(`${new Date().toLocaleTimeString()}  ${ok ? "✓" : "✗"} ${cmd.action}: ${output.split("\n")[0].slice(0, 120)}`);
         await fetch(new URL("/api/devices/result", config.server), { method: "POST", headers, body: JSON.stringify({ id: cmd.id, ok, output }) }).catch(() => {});
-      }
+      })();
     } catch (err) {
       if (err.fatal) throw err;
       // Offline or the server restarted: wait and try again, up to a minute apart.

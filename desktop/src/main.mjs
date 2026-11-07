@@ -133,6 +133,7 @@ async function refreshTray() {
     link
       ? { label: "Open my assistant", click: () => shell.openExternal(link.server) }
       : { label: "Sign in…", click: showLogin },
+    ...(link ? [{ label: "Open memory file", click: async () => { await syncMemory(); await shell.openPath(MEMORY_FILE()); } }] : []),
     { type: "separator" },
     { label: "Optional tools", enabled: false },
     ...toolItems(),
@@ -183,6 +184,7 @@ ipcMain.handle("sign-in", async (_e, { server, email, password }) => {
     await saveLink(link);
     await setStartAtLogin(true);
     startLoop();
+    startMemorySync();
     setTimeout(() => loginWindow?.close(), 1200);
     return { ok: true, message: `Linked ${COMPUTER} to ${body.email}.` };
   } catch {
@@ -198,9 +200,33 @@ async function signOut() {
   const old = link;
   link = null; loopId++;
   await rm(LINK_FILE(), { force: true });
+  if (memoryTimer) { clearInterval(memoryTimer); memoryTimer = null; }
   if (old) await fetch(new URL("/api/devices/self", old.server), { method: "DELETE", headers: { authorization: `Bearer ${old.token}` }, signal: AbortSignal.timeout(10_000) }).catch(() => {});
   setState("Not signed in", "");
   showLogin();
+}
+
+// ── Memory copy ──
+// A readable copy of what the assistant remembers, kept in Documents. The
+// account's memory itself lives on the server, so every device shares it.
+
+const MEMORY_FILE = () => path.join(app.getPath("documents"), "UNC Assistant", "memory.md");
+let memoryTimer = null;
+
+async function syncMemory() {
+  if (!link) return;
+  try {
+    const res = await fetch(new URL("/api/devices/memory", link.server), { headers: { authorization: `Bearer ${link.token}` }, signal: AbortSignal.timeout(30_000) });
+    if (!res.ok) return;
+    await mkdir(path.dirname(MEMORY_FILE()), { recursive: true });
+    await writeFile(MEMORY_FILE(), await res.text(), { mode: 0o600 });
+  } catch { /* offline: the last copy stays */ }
+}
+
+function startMemorySync() {
+  if (memoryTimer) clearInterval(memoryTimer);
+  void syncMemory();
+  memoryTimer = setInterval(() => void syncMemory(), 10 * 60_000);
 }
 
 // ── The work loop ──
@@ -224,16 +250,19 @@ function startLoop() {
         const { commands = [] } = await res.json();
         setState(`Connected as ${link.email}`);
         backoff = 1000;
-        for (const cmd of commands) {
+        // Each command runs on its own, so a long Claude Code task doesn't stop the polling
+        // (the account would otherwise see this computer as offline).
+        for (const cmd of commands) void (async () => {
           let ok = true, output;
           try {
             const action = ACTIONS[cmd.action];
             if (!action) throw new Error(`Unknown action ${cmd.action}.`);
-            output = await action(cmd.args || {});
+            if (cmd.action.startsWith("dev_")) setState(state.text, "Claude Code is working…");
+            output = String(await action(cmd.args || {}));
           } catch (err) { ok = false; output = err instanceof Error ? err.message : String(err); }
           setState(state.text, `${ok ? "✓" : "✗"} ${String(output).split("\n")[0].slice(0, 60)}`);
           await fetch(new URL("/api/devices/result", link.server), { method: "POST", headers, body: JSON.stringify({ id: cmd.id, ok, output }) }).catch(() => {});
-        }
+        })();
       } catch {
         if (id !== loopId) return;
         // Offline or the server restarted: wait and try again, up to a minute apart.
@@ -260,6 +289,6 @@ else {
     void checkTools();
     void checkForUpdate();
     setInterval(() => void checkForUpdate(), 6 * 3600_000);
-    if (link) startLoop(); else showLogin();
+    if (link) { startLoop(); startMemorySync(); } else showLogin();
   });
 }

@@ -98,6 +98,14 @@ export function useApexVoice(options: {
   // reply until they press it off.
   const conversationRef = useRef(autoListen);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  // The saved conversation comes back on every visit and device (lib/memory.ts).
+  useEffect(() => {
+    let live = true;
+    void fetch("/api/agent/history").then(r => (r.ok ? r.json() : null)).then((body: { messages?: ChatMessage[] } | null) => {
+      if (live && body?.messages?.length) setMessages(current => (current.length ? current : body.messages!));
+    }).catch(() => {});
+    return () => { live = false; };
+  }, []);
   const [state, setState] = useState<VoiceState>("idle");
   const [pendingActions, setPendingActions] = useState<PendingAction[]>([]);
   const [error, setError] = useState<string | null>(null);
