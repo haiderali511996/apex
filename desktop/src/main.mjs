@@ -264,6 +264,13 @@ function startMemorySync() {
 
 // ── The work loop ──
 
+/** Sends a job's live progress to the server, at most about once a second (the last state always goes). */
+function progressSender(server, headers, id) {
+  let timer = null, latest = null, last = 0;
+  const flush = () => { timer = null; last = Date.now(); void fetch(new URL("/api/devices/progress", server), { method: "POST", headers, body: JSON.stringify({ id, progress: latest }) }).catch(() => {}); };
+  return (p) => { latest = JSON.parse(JSON.stringify(p)); if (!timer) timer = setTimeout(flush, Math.max(0, 900 - (Date.now() - last))); };
+}
+
 function startLoop() {
   const id = ++loopId;
   void (async () => {
@@ -291,7 +298,7 @@ function startLoop() {
             const action = ACTIONS[cmd.action];
             if (!action) throw new Error(`Unknown action ${cmd.action}.`);
             if (cmd.action.startsWith("dev_")) setState(state.text, "Claude Code is working…");
-            output = String(await action(cmd.args || {}));
+            output = String(await action(cmd.args || {}, { progress: progressSender(link.server, headers, cmd.id) }));
           } catch (err) { ok = false; output = err instanceof Error ? err.message : String(err); }
           setState(state.text, `${ok ? "✓" : "✗"} ${String(output).split("\n")[0].slice(0, 60)}`);
           await fetch(new URL("/api/devices/result", link.server), { method: "POST", headers, body: JSON.stringify({ id: cmd.id, ok, output }) }).catch(() => {});

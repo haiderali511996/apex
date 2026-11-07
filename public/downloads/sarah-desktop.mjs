@@ -175,25 +175,81 @@ async function findProject(wanted) {
   return matches[0];
 }
 
-/** Runs Claude Code in a folder with a prompt on stdin (no shell quoting involved) and returns its answer. */
-async function runClaude(cwd, prompt, tools, act, timeoutMs) {
+/** A tool call as one line of progress, like Claude Code shows it. */
+function stepLabel(name, input = {}, cwd = "") {
+  const rel = (f) => { const r = path.relative(cwd, String(f || "")); return r && !r.startsWith("..") ? r : tilde(String(f || "")); };
+  const cut = (t, n = 90) => { t = String(t || "").replace(/\s+/g, " ").trim(); return t.length > n ? `${t.slice(0, n - 1)}…` : t; };
+  switch (name) {
+    case "Bash": return input.description ? cut(input.description) : `Running ${cut(input.command, 80)}`;
+    case "Read": return `Reading ${rel(input.file_path)}`;
+    case "Edit": case "MultiEdit": return `Editing ${rel(input.file_path)}`;
+    case "Write": return `Writing ${rel(input.file_path)}`;
+    case "NotebookEdit": return `Editing ${rel(input.notebook_path)}`;
+    case "Glob": return `Finding files ${cut(input.pattern, 60)}`;
+    case "Grep": return `Searching for "${cut(input.pattern, 60)}"`;
+    case "WebSearch": return `Searching the web: ${cut(input.query, 70)}`;
+    case "WebFetch": { try { return `Reading ${new URL(input.url).host}`; } catch { return "Reading a web page"; } }
+    default: return name;
+  }
+}
+
+/**
+ * Runs Claude Code in a folder with a prompt on stdin (no shell quoting
+ * involved) and returns its answer. Its live events are turned into progress
+ * — the to-do list and each step, running, done or failed — and passed to
+ * onProgress, which the app forwards so the user watches the work happen.
+ */
+async function runClaude(cwd, prompt, tools, act, timeoutMs, onProgress) {
   const bin = await claudeBinary();
   if (!bin) throw new Error(`Claude Code isn't installed on ${os.hostname()}. Install it from https://claude.com/claude-code, sign in once by running "claude" in a terminal, then ask again.`);
   const env = { ...process.env };
   delete env.ANTHROPIC_API_KEY;
-  const args = ["-p", "--output-format", "text", "--allowedTools", tools.join(","), ...(act ? ["--permission-mode", "acceptEdits"] : [])];
+  const args = ["-p", "--output-format", "stream-json", "--verbose", "--allowedTools", tools.join(","), ...(act ? ["--permission-mode", "acceptEdits"] : [])];
+  const progress = { steps: [], todos: [], note: "" };
+  const byId = new Map();
+  const report = () => { try { onProgress?.(progress); } catch { /* progress is best effort */ } };
   return new Promise((resolve, reject) => {
     const child = spawn(bin, args, { cwd, env, windowsHide: true, shell: /\.cmd$/i.test(bin) });
-    let out = "", err = "";
+    let buffer = "", err = "", final = null, failed = false, plain = "";
     const timer = setTimeout(() => { child.kill(); reject(new Error(`Claude Code took longer than ${Math.round(timeoutMs / 60000)} minutes and was stopped.`)); }, timeoutMs);
-    child.stdout.on("data", d => { out += d; });
+    const onEvent = (e) => {
+      if (e.type === "assistant") {
+        for (const block of e.message?.content ?? []) {
+          if (block.type === "text" && block.text?.trim()) progress.note = block.text.trim().slice(0, 300);
+          if (block.type !== "tool_use" || block.name === "ToolSearch") continue;
+          if (block.name === "TodoWrite") { progress.todos = (block.input?.todos ?? []).map(t => ({ content: t.content, activeForm: t.activeForm, status: t.status })); continue; }
+          const step = { label: stepLabel(block.name, block.input, cwd), status: "running" };
+          progress.steps.push(step); byId.set(block.id, step);
+          if (progress.steps.length > 60) progress.steps.splice(0, progress.steps.length - 60);
+        }
+        report();
+      } else if (e.type === "user") {
+        for (const block of e.message?.content ?? []) {
+          const step = block?.type === "tool_result" ? byId.get(block.tool_use_id) : null;
+          if (step) step.status = block.is_error ? "failed" : "done";
+        }
+        report();
+      } else if (e.type === "result") {
+        final = typeof e.result === "string" ? e.result : "";
+        failed = !!e.is_error;
+      }
+    };
+    child.stdout.on("data", d => {
+      buffer += d;
+      let nl;
+      while ((nl = buffer.indexOf("\n")) >= 0) {
+        const line = buffer.slice(0, nl).trim(); buffer = buffer.slice(nl + 1);
+        if (!line) continue;
+        try { onEvent(JSON.parse(line)); } catch { plain += `${line}\n`; }
+      }
+    });
     child.stderr.on("data", d => { err += d; });
     child.on("error", e => { clearTimeout(timer); reject(e); });
     child.on("close", code => {
       clearTimeout(timer);
-      const text = out.trim();
-      if (code === 0 && text) return resolve(text.length > 7000 ? `${text.slice(0, 7000)}\n…(cut short)` : text);
-      const why = (err || text).trim();
+      const text = (final ?? "").trim();
+      if (code === 0 && text && !failed) return resolve(text.length > 7000 ? `${text.slice(0, 7000)}\n…(cut short)` : text);
+      const why = (err || text || plain).trim();
       reject(new Error(/login|log in|authenticate|api key/i.test(why) ? `Claude Code on ${os.hostname()} isn't signed in. Run "claude" in a terminal once and sign in.` : `Claude Code stopped: ${why.slice(0, 600) || `exit code ${code}`}`));
     });
     child.stdin.end(prompt);
@@ -368,30 +424,30 @@ if (-not $b) { "Battery: none (desktop computer)" } else {
     return `${head}\n${projects.slice(0, 40).map(p => `${p.name} — ${tilde(p.path)}${p.claude ? " (worked on in Claude Code)" : ""}, last active ${new Date(p.lastActive).toISOString().slice(0, 10)}`).join("\n")}`;
   },
 
-  async dev_ask({ project, task }) {
+  async dev_ask({ project, task }, ctx = {}) {
     const p = await findProject(project);
-    return `${p.name} (${tilde(p.path)}):\n${await runClaude(p.path, `${ASK_BRIEF}\n\nQuestion: ${task}`, ["Read", "Glob", "Grep"], false, 4 * 60_000)}`;
+    return `${p.name} (${tilde(p.path)}):\n${await runClaude(p.path, `${ASK_BRIEF}\n\nQuestion: ${task}`, ["Read", "Glob", "Grep", "TodoWrite"], false, 4 * 60_000, ctx.progress)}`;
   },
 
-  async dev_chats({ task }) {
+  async dev_chats({ task }, ctx = {}) {
     if (!existsSync(CLAUDE_PROJECTS)) return "There are no saved Claude Code chats on this computer yet.";
-    return runClaude(CLAUDE_PROJECTS, `${CHATS_BRIEF}\n\nQuestion: ${task}`, ["Read", "Glob", "Grep"], false, 4 * 60_000);
+    return runClaude(CLAUDE_PROJECTS, `${CHATS_BRIEF}\n\nQuestion: ${task}`, ["Read", "Glob", "Grep", "TodoWrite"], false, 4 * 60_000, ctx.progress);
   },
 
   // An agent the user set to Claude (research, strategy…): Claude Code answers,
   // with web search when the agent needs current facts. Nothing is changed on
   // this computer: it works in its own empty folder with no file or terminal tools.
-  async claude_ask({ prompt, web }) {
+  async claude_ask({ prompt, web }, ctx = {}) {
     if (!prompt) throw new Error("Empty request.");
     const dir = path.join(HOME, "Documents", "UNC Assistant", "claude-work");
     await mkdir(dir, { recursive: true });
-    return runClaude(dir, String(prompt), web ? ["WebSearch", "WebFetch"] : ["WebSearch"], false, 5 * 60_000);
+    return runClaude(dir, String(prompt), web ? ["WebSearch", "WebFetch", "TodoWrite"] : ["WebSearch", "TodoWrite"], false, 5 * 60_000, ctx.progress);
   },
 
   // Sent only after the user approved this exact task in the app.
-  async dev_task({ project, task }) {
+  async dev_task({ project, task }, ctx = {}) {
     const p = await findProject(project);
-    return `${p.name} (${tilde(p.path)}):\n${await runClaude(p.path, `${TASK_BRIEF}\n\nTask: ${task}`, ["Bash", "Read", "Edit", "Write", "Glob", "Grep", "WebFetch", "WebSearch", "TodoWrite"], true, 10 * 60_000)}`;
+    return `${p.name} (${tilde(p.path)}):\n${await runClaude(p.path, `${TASK_BRIEF} For anything with more than two steps, keep a to-do list with TodoWrite so the user can follow along.\n\nTask: ${task}`, ["Bash", "Read", "Edit", "Write", "Glob", "Grep", "WebFetch", "WebSearch", "TodoWrite"], true, 10 * 60_000, ctx.progress)}`;
   },
 };
 
@@ -443,6 +499,13 @@ async function pair(code, server) {
   console.log(`Linked ${os.hostname()} (${OS_NAME}). Now run: node sarah-desktop.mjs`);
 }
 
+/** Sends a job's live progress to the server, at most about once a second (the last state always goes). */
+function progressSender(server, headers, id) {
+  let timer = null, latest = null, last = 0;
+  const flush = () => { timer = null; last = Date.now(); void fetch(new URL("/api/devices/progress", server), { method: "POST", headers, body: JSON.stringify({ id, progress: latest }) }).catch(() => {}); };
+  return (p) => { latest = JSON.parse(JSON.stringify(p)); if (!timer) timer = setTimeout(flush, Math.max(0, 900 - (Date.now() - last))); };
+}
+
 async function work() {
   const config = await loadConfig();
   if (!config) throw new Error("This computer isn't linked yet. Get a code on your Account page, then run: node sarah-desktop.mjs pair <CODE> --server <your site>");
@@ -460,7 +523,7 @@ async function work() {
         try {
           const action = ACTIONS[cmd.action];
           if (!action) throw new Error(`Unknown action ${cmd.action}.`);
-          output = String(await action(cmd.args || {}));
+          output = String(await action(cmd.args || {}, { progress: progressSender(config.server, headers, cmd.id) }));
         } catch (err) { ok = false; output = err instanceof Error ? err.message : String(err); }
         console.log(`${new Date().toLocaleTimeString()}  ${ok ? "✓" : "✗"} ${cmd.action}: ${output.split("\n")[0].slice(0, 120)}`);
         await fetch(new URL("/api/devices/result", config.server), { method: "POST", headers, body: JSON.stringify({ id: cmd.id, ok, output }) }).catch(() => {});

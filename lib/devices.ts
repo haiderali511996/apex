@@ -47,8 +47,14 @@ function db() {
       updated_at TEXT NOT NULL
     );
   `);
+  // Live progress of long jobs (Claude Code steps and to-dos), added later.
+  if (!progressColumn) {
+    try { d.exec("ALTER TABLE device_commands ADD COLUMN progress TEXT"); } catch { /* already there */ }
+    progressColumn = true;
+  }
   return d;
 }
+let progressColumn = false;
 
 type DeviceRow = { id: string; user_id: string; name: string; os: string; created_at: string; last_seen: string | null };
 const toDevice = (r: DeviceRow): Device => ({ id: r.id, userId: r.user_id, name: r.name, os: r.os, createdAt: r.created_at, lastSeen: r.last_seen });
@@ -168,4 +174,30 @@ export function claudeComputer(userId: string, name?: string): Device {
   throw new Error(linked.length
     ? `Claude Code runs on your computer, and none is online: start the UNC Assistant desktop app on ${linked.map(d => d.name).join(" or ")}.`
     : "Claude Code runs on your computer through the desktop app. Install it from the Download page and sign in, then ask again.");
+}
+
+/** The computer reports a running job's progress; only its own commands. */
+export function saveProgress(deviceId: string, commandId: string, progress: unknown) {
+  const text = JSON.stringify(progress ?? null);
+  if (text.length > 60_000) return;
+  db().prepare("UPDATE device_commands SET progress = ?, updated_at = ? WHERE id = ? AND device_id = ? AND status IN ('queued', 'sent')").run(text, new Date().toISOString(), commandId, deviceId);
+}
+
+export type Job = { id: string; action: string; computer: string; task: string; status: string; progress: unknown; result: string | null; startedAt: string; updatedAt: string };
+
+/** Claude Code jobs that are running, or finished in the last two minutes, for the live Developer panel. */
+export function recentJobs(userId: string): Job[] {
+  const since = new Date(Date.now() - 2 * 60_000).toISOString();
+  const rows = db().prepare(`SELECT c.id, c.action, c.args, c.status, c.progress, c.result, c.created_at, c.updated_at, d.name AS computer
+    FROM device_commands c JOIN devices d ON d.id = c.device_id
+    WHERE c.user_id = ? AND c.action IN ('dev_task', 'dev_ask', 'dev_chats', 'claude_ask') AND (c.status IN ('queued', 'sent') OR c.updated_at > ?)
+    ORDER BY c.created_at DESC LIMIT 3`).all(userId, since) as { id: string; action: string; args: string; status: string; progress: string | null; result: string | null; created_at: string; updated_at: string; computer: string }[];
+  return rows.map(r => {
+    let args: { task?: string; prompt?: string; project?: string } = {};
+    try { args = JSON.parse(r.args); } catch { /* keep empty */ }
+    let progress: unknown = null;
+    try { progress = r.progress ? JSON.parse(r.progress) : null; } catch { /* keep null */ }
+    const task = String(args.task ?? args.prompt ?? "").split("\n\nImages to use")[0].split("\n\nGit rule")[0].replace(/^You are the [\s\S]*?Request: /, "").slice(0, 400);
+    return { id: r.id, action: r.action, computer: r.computer, task, status: r.status, progress, result: r.status === "queued" || r.status === "sent" ? null : (r.result ?? "").slice(0, 1500), startedAt: r.created_at, updatedAt: r.updated_at };
+  });
 }

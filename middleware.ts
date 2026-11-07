@@ -8,7 +8,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 const PUBLIC_PAGES = ["/sitemap.xml", "/robots.txt", "/welcome", "/download", "/pricing", "/login", "/signup", "/docs", "/privacy", "/terms"];
 // Each of these routes checks the session itself for anything that writes.
-const PUBLIC_API = ["/api/auth/", "/api/billing/unc", "/api/community", "/api/devices/register", "/api/devices/login", "/api/devices/self", "/api/devices/poll", "/api/devices/result", "/api/devices/memory", "/api/billing/stripe-webhook", "/api/billing/card"];
+const PUBLIC_API = ["/api/auth/", "/api/billing/unc", "/api/community", "/api/devices/register", "/api/devices/login", "/api/devices/self", "/api/devices/poll", "/api/devices/result", "/api/devices/memory", "/api/devices/progress", "/api/billing/stripe-webhook", "/api/billing/card"];
 
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;

@@ -22,6 +22,7 @@ import TodayCard from "./TodayCard";
 import AgentsPanel from "./AgentsPanel";
 import ConversationPanel from "./ConversationPanel";
 import { AgentOverview, type NodeSel } from "./agents";
+import DeveloperLive from "./DeveloperLive";
 import DesignStudio, { type DesignWork } from "./DesignStudio";
 import VoicePicker from "../VoicePicker";
 import ImexHologram from "../ImexHologram";
@@ -304,6 +305,7 @@ export default function SarahDeck() {
       {voicePickerOpen && <VoicePicker onClose={() => setVoicePickerOpen(false)} />}
       {design && <DesignStudio work={design} onClose={() => setDesign(null)} />}
       {selected && <AgentOverview sel={selected} onClose={() => setSelected(null)} />}
+      <DeveloperLive />
 
       {/* The face sits over everything; the voice loop keeps running behind it
           so the conversation continues while it's open. */}
