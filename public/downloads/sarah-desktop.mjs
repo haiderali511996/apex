@@ -14,7 +14,7 @@
 
 import { execFile, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { readFile, writeFile, rm, readdir, stat, open as openFile } from "node:fs/promises";
+import { readFile, writeFile, rm, readdir, stat, mkdir, open as openFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -376,6 +376,16 @@ if (-not $b) { "Battery: none (desktop computer)" } else {
   async dev_chats({ task }) {
     if (!existsSync(CLAUDE_PROJECTS)) return "There are no saved Claude Code chats on this computer yet.";
     return runClaude(CLAUDE_PROJECTS, `${CHATS_BRIEF}\n\nQuestion: ${task}`, ["Read", "Glob", "Grep"], false, 4 * 60_000);
+  },
+
+  // An agent the user set to Claude (research, strategy…): Claude Code answers,
+  // with web search when the agent needs current facts. Nothing is changed on
+  // this computer: it works in its own empty folder with no file or terminal tools.
+  async claude_ask({ prompt, web }) {
+    if (!prompt) throw new Error("Empty request.");
+    const dir = path.join(HOME, "Documents", "UNC Assistant", "claude-work");
+    await mkdir(dir, { recursive: true });
+    return runClaude(dir, String(prompt), web ? ["WebSearch", "WebFetch"] : ["WebSearch"], false, 5 * 60_000);
   },
 
   // Sent only after the user approved this exact task in the app.

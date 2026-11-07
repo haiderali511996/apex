@@ -154,3 +154,18 @@ export async function runOnDevice(userId: string, deviceId: string, action: stri
   d.prepare("UPDATE device_commands SET status = 'failed', result = 'timed out' WHERE id = ? AND status IN ('queued', 'sent')").run(id);
   throw new Error("The computer didn't answer in time. Is the desktop app still running?");
 }
+
+/**
+ * The computer that runs Claude Code for this account (the Developer, and any
+ * agent set to Claude): a named one, else an online Mac, else any online one.
+ */
+export function claudeComputer(userId: string, name?: string): Device {
+  if (name) return pickDevice(userId, name);
+  const online = listDevices(userId).filter(isOnline);
+  const chosen = online.find(d => d.os === "macOS") ?? online[0];
+  if (chosen) return chosen;
+  const linked = listDevices(userId);
+  throw new Error(linked.length
+    ? `Claude Code runs on your computer, and none is online: start the UNC Assistant desktop app on ${linked.map(d => d.name).join(" or ")}.`
+    : "Claude Code runs on your computer through the desktop app. Install it from the Download page and sign in, then ask again.");
+}

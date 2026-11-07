@@ -180,6 +180,7 @@ export default function Account() {
       <button type="button" className="btn btn-ghost btn-small" style={{ justifySelf: "start" }} onClick={async () => { await fetch("/api/auth/logout", { method: "POST" }); window.location.href = "/welcome"; }}>Log out</button>
 
       <Computers />
+      <AgentEngines />
       <MemoryBank />
       <BrandLogo />
       <Music />
@@ -264,6 +265,38 @@ function Computers() {
 }
 
 type MusicTrack = { id: string; name: string; size: number };
+
+/** Which AI each agent thinks with; also settable by voice ("use Claude for research"). */
+function AgentEngines() {
+  const [data, setData] = useState<{ engines: Record<string, string>; names: Record<string, string>; fixed: { agent: string; engine: string }[] } | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => { void fetch("/api/agent-engines").then(r => r.ok ? r.json() : null).then(b => b && setData(b)); }, []);
+  const choose = async (agent: string, engine: string) => {
+    const res = await fetch("/api/agent-engines", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ agent, engine }) }).catch(() => null);
+    const body = res ? await res.json().catch(() => ({})) : {};
+    if (res?.ok && data) { setData({ ...data, engines: body.engines }); setError(""); } else setError(body.error || "Couldn't save — check your connection.");
+  };
+  if (!data) return null;
+  return (
+    <section className="card" style={{ padding: 24 }}>
+      <h3 style={{ fontSize: 18 }}>Which AI each agent uses</h3>
+      <p style={{ marginBottom: 14 }}>Pick Gemini or Claude for each agent, or just tell your assistant, e.g. &ldquo;use Claude for my research from now on&rdquo;. Claude runs through Claude Code on your computer (your Claude subscription), so the desktop app must be running there; if it isn&apos;t, Gemini answers and says so.</p>
+      <div style={{ display: "grid", gap: 8 }}>
+        {Object.entries(data.names).map(([key, name]) => <label key={key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, border: "1px solid var(--line)", borderRadius: 10, padding: "8px 12px" }}>
+          <b style={{ color: "var(--text)" }}>{name}</b>
+          <select value={data.engines[key]} onChange={e => void choose(key, e.target.value)} aria-label={`AI for ${name}`}>
+            <option value="gemini">Gemini</option>
+            <option value="claude-code">Claude (Claude Code)</option>
+          </select>
+        </label>)}
+        {data.fixed.map(f => <div key={f.agent} style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "6px 12px", color: "var(--muted)", fontSize: 14, flexWrap: "wrap" }}>
+          <span>{f.agent}</span><span>{f.engine}</span>
+        </div>)}
+      </div>
+      {error && <p className="form-error" style={{ marginTop: 8 }}>{error}</p>}
+    </section>
+  );
+}
 
 type MemoryItem = { id: string; category: string; fact: string; source: "auto" | "user"; updatedAt: string };
 const MEMORY_GROUPS: [string, string][] = [["preference", "Your rules and preferences"], ["profile", "About you"], ["project", "Projects"], ["connection", "Connected accounts and computers"], ["asset", "Designs, logos and files"], ["decision", "Decisions"], ["person", "People and companies"], ["task", "Open tasks"], ["work", "Work done together"]];

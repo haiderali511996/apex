@@ -8,9 +8,10 @@ import { createPendingAction, listPendingActions, listActionLog, getProjectNames
 import { askSpecialist } from "./specialist";
 import { SPECIALISTS, specialistKeys } from "./roles";
 import { askAboutChats, askDeveloper, listProjects, nameProject, resolveProject } from "./developer";
-import { isOnline, listDevices, pickDevice, runOnDevice } from "@/lib/devices";
+import { claudeComputer, isOnline, listDevices, pickDevice, runOnDevice } from "@/lib/devices";
 import { currentUserId } from "@/lib/credentials";
 import { findDesign, listDesigns } from "@/lib/designs";
+import { ENGINES, setAgentEngine } from "@/lib/agentEngines";
 import { addMemory, CATEGORIES, deleteMemory, recentTurns, searchMemories, type Category } from "@/lib/memory";
 import { controlMediaApps, focusChromeTab, systemInfo, listChromeProfiles, listChromeTabs, listRunningApps, openApp, openUrl, setVolume } from "./mac";
 import type { ClientAction, PendingAction, Report } from "./types";
@@ -378,6 +379,18 @@ export const toolDefinitions: Anthropic.Tool[] = [
       required: ["role", "request"],
     },
   },
+  {
+    name: "set_agent_engine",
+    description: "Choose which AI an agent thinks with, saved for all future conversations. Use when the user says e.g. \"use Claude for my research\", \"let Claude handle strategy\", \"switch marketing back to Gemini\". \"claude-code\" = Claude through Claude Code on their computer (their subscription); \"gemini\" = Gemini. agent \"all\" sets every agent.",
+    input_schema: {
+      type: "object",
+      properties: {
+        agent: { type: "string", enum: [...specialistKeys(), "all"], description: "Which agent." },
+        engine: { type: "string", enum: ["claude-code", "gemini"] },
+      },
+      required: ["agent", "engine"],
+    },
+  },
   /* ── Linked computers (the desktop app: Mac, Windows, Linux) ── */
   {
     name: "computer_list",
@@ -527,22 +540,9 @@ function attachDesign(id: unknown) {
   return design;
 }
 
-/**
- * Hosted (not on the owner's Mac), the Developer is the Claude Code on the
- * user's own computer, reached through the desktop app. A named computer wins;
- * otherwise an online Mac, then any online computer.
- */
+/** Hosted (not on the owner's Mac), the Developer is the Claude Code on the user's own computer, through the desktop app. */
 const HOSTED = process.platform !== "darwin";
-function devComputer(userId: string, name?: string) {
-  if (name) return pickDevice(userId, name);
-  const online = listDevices(userId).filter(isOnline);
-  const chosen = online.find(d => d.os === "macOS") ?? online[0];
-  if (chosen) return chosen;
-  const linked = listDevices(userId);
-  throw new Error(linked.length
-    ? `The Developer (Claude Code) runs on your computer, and none is online: start the UNC Assistant desktop app on ${linked.map(d => d.name).join(" or ")}.`
-    : "The Developer (Claude Code) runs on your computer through the desktop app. Install it from the Download page and sign in, then ask again.");
-}
+const devComputer = claudeComputer;
 async function devComputerName() { return devComputer(currentUserOrThrow()).name; }
 function onDevComputer(action: string, args: Record<string, unknown>, timeoutMs: number) {
   const userId = currentUserOrThrow();
@@ -857,6 +857,14 @@ export async function executeTool(name: string, input: Record<string, unknown>):
       };
     }
 
+    case "set_agent_engine": {
+      const userId = currentUserOrThrow();
+      const engine = input.engine === "claude-code" ? "claude-code" : "gemini";
+      setAgentEngine(userId, String(input.agent), engine);
+      const who = input.agent === "all" ? "Every agent" : SPECIALISTS[String(input.agent)]?.name ?? String(input.agent);
+      const reach = engine === "claude-code" ? (listDevices(userId).length ? " It runs through the desktop app on their computer, which needs to be on." : " No computer is linked yet: they need the desktop app (Download page) signed in on the computer with Claude Code.") : "";
+      return { text: `Saved: ${who} now uses ${ENGINES[engine]} from now on.${reach}` };
+    }
     case "ask_specialist": {
       const role = input.role as string;
       if (!SPECIALISTS[role]) return { text: `Unknown specialist "${role}". Available: ${specialistKeys().join(", ")}.` };

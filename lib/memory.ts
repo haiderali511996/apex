@@ -21,7 +21,7 @@ import { recallFacts } from "./agent/store";
 export const CATEGORIES = ["profile", "preference", "project", "connection", "decision", "asset", "person", "task", "work"] as const;
 export type Category = (typeof CATEGORIES)[number];
 export type Memory = { id: string; category: Category; fact: string; source: "auto" | "user"; createdAt: string; updatedAt: string };
-export type ChatTurn = { role: "user" | "assistant"; content: string; at: string };
+export type ChatTurn = { id?: string; role: "user" | "assistant"; content: string; at: string };
 
 const CATEGORY_TITLES: Record<Category, string> = {
   profile: "About them",
@@ -133,6 +133,37 @@ export function logTurn(userId: string, role: "user" | "assistant", content: str
 export function recentTurns(userId: string, limit = 40): ChatTurn[] {
   return (db().prepare("SELECT role, content, created_at FROM chat_log WHERE user_id = ? ORDER BY created_at DESC LIMIT ?").all(userId, limit) as { role: string; content: string; created_at: string }[])
     .reverse().map(r => ({ role: r.role === "assistant" ? "assistant" : "user", content: r.content, at: r.created_at }));
+}
+
+/** Every saved turn from a time on (inclusive, so none sharing that instant is missed; the app drops ones it has), oldest first, for the desktop app's complete local backup. */
+export function turnsSince(userId: string, since: string): ChatTurn[] {
+  return (db().prepare("SELECT id, role, content, created_at FROM chat_log WHERE user_id = ? AND created_at >= ? ORDER BY created_at").all(userId, since || "") as { id: string; role: string; content: string; created_at: string }[])
+    .map(r => ({ id: r.id, role: r.role === "assistant" ? "assistant" : "user", content: r.content, at: r.created_at }));
+}
+
+export function turnCount(userId: string): number {
+  return (db().prepare("SELECT count(*) AS n FROM chat_log WHERE user_id = ?").get(userId) as { n: number }).n;
+}
+
+/**
+ * Puts memory back from the desktop app's backup — only when the server has
+ * none for this account (a lost database), so it can never overwrite or
+ * duplicate what's there.
+ */
+export async function restoreMemory(userId: string, facts: Partial<Memory>[], turns: ChatTurn[]): Promise<{ facts: number; turns: number } | null> {
+  if ((await listMemories(userId)).length || turnCount(userId)) return null;
+  let f = 0, t = 0;
+  for (const m of facts.slice(-MAX_FACTS)) {
+    const category = (CATEGORIES as readonly string[]).includes(m.category ?? "") ? m.category as Category : "work";
+    if (typeof m.fact === "string" && addMemory(userId, category, m.fact, m.source === "auto" ? "auto" : "user", typeof m.updatedAt === "string" ? m.updatedAt : undefined)) f++;
+  }
+  const d = db();
+  for (const turn of turns.slice(-KEEP_TURNS)) {
+    if (typeof turn.content !== "string" || !turn.content.trim()) continue;
+    t += Number(d.prepare("INSERT OR IGNORE INTO chat_log (id, user_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)")
+      .run(typeof turn.id === "string" ? turn.id : randomUUID(), userId, turn.role === "assistant" ? "assistant" : "user", turn.content.slice(0, 8000), typeof turn.at === "string" ? turn.at : new Date().toISOString()).changes);
+  }
+  return { facts: f, turns: t };
 }
 
 export function clearConversation(userId: string) {

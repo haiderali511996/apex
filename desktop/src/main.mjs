@@ -133,7 +133,7 @@ async function refreshTray() {
     link
       ? { label: "Open my assistant", click: () => shell.openExternal(link.server) }
       : { label: "Sign in…", click: showLogin },
-    ...(link ? [{ label: "Open memory file", click: async () => { await syncMemory(); await shell.openPath(MEMORY_FILE()); } }] : []),
+    ...(link ? [{ label: "Open memory folder", click: async () => { await syncMemory(); await shell.openPath(MEMORY_DIR()); } }] : []),
     { type: "separator" },
     { label: "Optional tools", enabled: false },
     ...toolItems(),
@@ -210,23 +210,56 @@ async function signOut() {
 // A readable copy of what the assistant remembers, kept in Documents. The
 // account's memory itself lives on the server, so every device shares it.
 
-const MEMORY_FILE = () => path.join(app.getPath("documents"), "UNC Assistant", "memory.md");
+const MEMORY_DIR = () => path.join(app.getPath("documents"), "UNC Assistant");
+const MEMORY_FILE = () => path.join(MEMORY_DIR(), "memory.md");
+const BACKUP_FILE = () => path.join(MEMORY_DIR(), "memory-backup.json");
+const HISTORY_FILE = () => path.join(MEMORY_DIR(), "conversation-history.md");
 let memoryTimer = null;
 
+async function readBackup() {
+  try { return JSON.parse(await readFile(BACKUP_FILE(), "utf8")); } catch { return { account: "", facts: [], turns: [] }; }
+}
+
+/**
+ * Keeps the complete memory on this computer: every fact, and every turn of
+ * the conversation ever (the server keeps the latest 400). If the server ever
+ * has none for this account (a lost database), it is restored from here.
+ */
 async function syncMemory() {
   if (!link) return;
+  const headers = { authorization: `Bearer ${link.token}`, "content-type": "application/json" };
+  const url = (q = "") => new URL(`/api/devices/memory${q}`, link.server);
   try {
-    const res = await fetch(new URL("/api/devices/memory", link.server), { headers: { authorization: `Bearer ${link.token}` }, signal: AbortSignal.timeout(30_000) });
+    let backup = await readBackup();
+    if (backup.account && backup.account !== link.email) backup = { account: link.email, facts: [], turns: [] };
+    backup.account = link.email;
+    const since = backup.turns.at(-1)?.at ?? "";
+    const res = await fetch(url(`?format=json&since=${encodeURIComponent(since)}`), { headers, signal: AbortSignal.timeout(30_000) });
     if (!res.ok) return;
-    await mkdir(path.dirname(MEMORY_FILE()), { recursive: true });
-    await writeFile(MEMORY_FILE(), await res.text(), { mode: 0o600 });
+    const server = await res.json();
+    if (!server.facts.length && !server.totalTurns && (backup.facts.length || backup.turns.length)) {
+      await fetch(url(), { method: "POST", headers, body: JSON.stringify({ facts: backup.facts, turns: backup.turns }), signal: AbortSignal.timeout(60_000) }).catch(() => {});
+      return;
+    }
+    // Facts follow the server (where they're edited); turns only ever accumulate here.
+    backup.facts = server.facts;
+    const seen = new Set(backup.turns.map(t => t.id));
+    backup.turns.push(...server.turns.filter(t => !seen.has(t.id)));
+    backup.updatedAt = new Date().toISOString();
+    await mkdir(MEMORY_DIR(), { recursive: true });
+    await writeFile(BACKUP_FILE(), JSON.stringify(backup, null, 1), { mode: 0o600 });
+    const history = ["# Conversation history", "", `Every conversation with your assistant, oldest first (${backup.turns.length} messages).`, ""];
+    for (const t of backup.turns) history.push(`**${t.role === "user" ? "You" : "Assistant"}** · ${String(t.at).slice(0, 16).replace("T", " ")}`, "", String(t.content), "");
+    await writeFile(HISTORY_FILE(), history.join("\n"), { mode: 0o600 });
+    const md = await fetch(url(), { headers, signal: AbortSignal.timeout(30_000) });
+    if (md.ok) await writeFile(MEMORY_FILE(), await md.text(), { mode: 0o600 });
   } catch { /* offline: the last copy stays */ }
 }
 
 function startMemorySync() {
   if (memoryTimer) clearInterval(memoryTimer);
   void syncMemory();
-  memoryTimer = setInterval(() => void syncMemory(), 10 * 60_000);
+  memoryTimer = setInterval(() => void syncMemory(), 5 * 60_000);
 }
 
 // ── The work loop ──
