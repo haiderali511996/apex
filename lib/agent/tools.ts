@@ -659,7 +659,10 @@ export async function executeTool(name: string, input: Record<string, unknown>):
       const max = (input.maxResults as number) || 10;
       const parts: string[] = [];
       if (useBox) parts.push(await (name === "get_inbox" ? mailbox.getInbox(max) : mailbox.searchMail(String(input.query ?? ""), max)).catch(err => `${mailbox.mailboxAddress()}: ${err instanceof Error ? err.message : err}`));
-      if (useGmail) parts.push(`Gmail: ${reportToText(await (name === "get_inbox" ? workspace.getInboxSummary(max) : workspace.searchEmail(String(input.query ?? ""), max)))}`);
+      // Each account answers on its own: one failing (an expired Google sign-in) must not hide the other's mail.
+      if (useGmail) parts.push(await (name === "get_inbox" ? workspace.getInboxSummary(max) : workspace.searchEmail(String(input.query ?? ""), max))
+        .then(r => `Gmail: ${reportToText(r)}`)
+        .catch(err => `Gmail couldn't be checked: ${/invalid_grant/.test(String(err instanceof Error ? err.message : err)) ? "the Google sign-in has expired — sign in with Google again on the Connections page" : err instanceof Error ? err.message : err}. (Only Gmail is affected; other connected email still works.)`));
       return { text: parts.join("\n\n") };
     }
     case "read_email": {
