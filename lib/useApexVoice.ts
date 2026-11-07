@@ -235,23 +235,32 @@ export function useApexVoice(options: {
   );
 
   const resumeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Another Sarah tab was used more recently, so it has the mic.
+  const cededRef = useRef(false);
   /**
-   * In conversation mode, open the mic again — but only in the tab being
-   * looked at. Chrome runs one recognizer at a time, so background tabs would
-   * otherwise keep stealing the mic from each other.
+   * Whether this tab may listen. Sarah's own mic recording keeps working
+   * while you're on another tab, so she still hears you. Only one Sarah tab
+   * listens at a time, though (the one used last), so two don't answer at
+   * once. The browser's built-in recognizer runs in one tab only, so with it
+   * Sarah listens only while her tab is showing.
    */
+  const mayListen = useCallback(() => {
+    if (typeof document === "undefined" || document.visibilityState !== "hidden") return true;
+    return inputRef.current instanceof CloudRecognition && !cededRef.current;
+  }, []);
+  /** In conversation mode, open the mic again. */
   const resumeListening = useCallback((delay: number) => {
     if (!conversationRef.current || !inputRef.current) return;
     if (resumeTimer.current) clearTimeout(resumeTimer.current);
     resumeTimer.current = setTimeout(() => {
       resumeTimer.current = null;
       if (!mountedRef.current || !conversationRef.current || stateRef.current !== "idle") return;
-      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      if (!mayListen()) return;
       setHeardText("");
       setVoiceState("listening");
       inputRef.current?.setMode("command");
     }, delay);
-  }, [setVoiceState]);
+  }, [setVoiceState, mayListen]);
 
   /** A reply has finished; in conversation mode, hand the floor back to the user. */
   const afterReply = useCallback(() => {
@@ -498,16 +507,29 @@ export function useApexVoice(options: {
       inputRef.current.keepAlive = true;
       resumeListening(0);
     }
-    // Hand the mic back when the tab is hidden; take it again on return.
+    const releaseMic = () => {
+      inputRef.current?.setMode(null);
+      if (stateRef.current === "listening") setVoiceState("idle");
+    };
+    // The Sarah tab you look at takes the mic; the others let it go.
+    let channel: BroadcastChannel | null = null;
+    try { channel = new BroadcastChannel("sarah-mic"); } catch { /* old browser: one tab assumed */ }
+    const claim = () => { cededRef.current = false; try { channel?.postMessage("claim"); } catch { /* closed */ } };
+    if (channel) channel.onmessage = e => {
+      if (e.data !== "claim" || document.visibilityState !== "hidden") return;
+      cededRef.current = true;
+      releaseMic();
+    };
+    if (typeof document !== "undefined" && document.visibilityState !== "hidden") claim();
+    // Hidden: keep listening if this mic allows it, else hand it back. Shown: take it.
     const onVisibility = () => {
-      if (document.visibilityState === "hidden") {
-        inputRef.current?.setMode(null);
-        if (stateRef.current === "listening") setVoiceState("idle");
-      } else resumeListening(0);
+      if (document.visibilityState === "hidden") { if (!mayListen()) releaseMic(); }
+      else { claim(); resumeListening(0); }
     };
     if (typeof document !== "undefined") document.addEventListener("visibilitychange", onVisibility);
     return () => {
       mountedRef.current = false;
+      channel?.close();
       if (typeof document !== "undefined") document.removeEventListener("visibilitychange", onVisibility);
       if (resumeTimer.current) clearTimeout(resumeTimer.current);
       speechGenerationRef.current++;
