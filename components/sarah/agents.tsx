@@ -1,13 +1,14 @@
 "use client";
 import FinancePanel from "./FinancePanel";
 import TradingPanel from "./TradingPanel";
+import { useDraggable } from "./useDraggable";
 
 /**
  * Sarah's specialists: the roster shown on the deck, what each one handles,
  * and the overview card that opens when one is picked.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect } from "react";
 
 export type NodeSel = { name: string; key: string; color: string };
 
@@ -104,14 +105,15 @@ export const STATUS_LINE: Record<AgentInfo["status"], { color: string; text: str
 
 /* ── Agent overview window ── */
 export function AgentOverview({ sel, onClose }: { sel: NodeSel; onClose: () => void }) {
-  const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
-  const dragRef = useRef<{ sx: number; sy: number } | null>(null);
+  // Dragged anywhere by its header; reopens where it was left.
+  const drag = useDraggable(`overview:${sel.key}`, () => ({ x: Math.max(8, window.innerWidth / 2 - 170), y: Math.max(90, window.innerHeight * 0.16) }));
+  const pos = drag.pos;
+  const opened = !!pos;
   const info = INFO[sel.key] ?? { role: "Specialist", status: "online" as const, caps: ["Part of the Sarah core"] };
   const c = sel.color;
   const status = STATUS_LINE[info.status];
 
   useEffect(() => {
-    setPos({ x: Math.max(8, window.innerWidth / 2 - 170), y: Math.max(90, window.innerHeight * 0.16) });
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -119,33 +121,17 @@ export function AgentOverview({ sel, onClose }: { sel: NodeSel; onClose: () => v
 
   // Move focus into the window when it opens and hand it back on close, so the
   // keyboard does not stay stranded on the agent list behind it.
-  const panelRef = useRef<HTMLDivElement>(null);
+  const panelRef = drag.ref;
   useEffect(() => {
-    if (!pos) return;
+    if (!opened) return;
     const opener = document.activeElement as HTMLElement | null;
     panelRef.current?.querySelector<HTMLElement>("button")?.focus();
     return () => { if (opener && document.contains(opener)) opener.focus(); };
-  }, [pos]);
-
-  const onMouseDown = (e: React.MouseEvent) => {
-    if (!pos) return;
-    dragRef.current = { sx: e.clientX - pos.x, sy: e.clientY - pos.y };
-    const move = (ev: MouseEvent) => {
-      if (dragRef.current) setPos({ x: ev.clientX - dragRef.current.sx, y: ev.clientY - dragRef.current.sy });
-    };
-    const up = () => {
-      dragRef.current = null;
-      document.removeEventListener("mousemove", move);
-      document.removeEventListener("mouseup", up);
-    };
-    document.addEventListener("mousemove", move);
-    document.addEventListener("mouseup", up);
-  };
+  }, [opened, panelRef]);
 
   if (!pos) return null;
   return (
-    <div ref={panelRef} className="sarah-agent-overview" role="dialog" aria-modal="true" aria-label={`${sel.name} overview`} style={{
-      position: "fixed", left: pos.x, top: pos.y,
+    <div ref={panelRef} className="sarah-agent-overview" role="dialog" aria-modal="true" aria-label={`${sel.name} overview`} onPointerDownCapture={drag.onPointerDownCapture} style={{
       width: sel.key === "finance" || sel.key === "trading" ? "min(460px, 92vw)" : "min(340px, 92vw)", zIndex: 60,
       maxHeight: "calc(100vh - 40px)", overflowY: "auto",
       background: "rgba(4,3,12,0.92)",
@@ -154,9 +140,10 @@ export function AgentOverview({ sel, onClose }: { sel: NodeSel; onClose: () => v
       borderRadius: 16,
       boxShadow: `0 0 40px ${c}18, 0 8px 32px rgba(0,0,0,0.6)`,
       overflow: "hidden",
+      ...drag.style,
     }}>
       {/* header - drag handle */}
-      <div onMouseDown={onMouseDown} style={{
+      <div onPointerDown={drag.handle.onPointerDown} title="Drag to move" style={{ touchAction: "none",
         display: "flex", alignItems: "center", gap: 10, padding: "14px 16px",
         borderBottom: `1px solid ${c}22`, cursor: "grab", userSelect: "none",
         background: `linear-gradient(135deg, ${c}0a 0%, transparent 100%)`,

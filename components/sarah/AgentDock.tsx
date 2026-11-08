@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import FinancePanel from "./FinancePanel";
 import TradingPanel from "./TradingPanel";
+import { useDraggable } from "./useDraggable";
 
 /**
  * Agents at work, live. The Developer at work: Claude Code's to-do list and each step it
@@ -36,16 +37,18 @@ function JobCard({ job, onClose }: { job: Job; onClose: () => void }) {
   const hidden = steps.length - shown.length;
   const failed = job.status === "failed";
   const waitingLong = running && !steps.length && !todos.length && Date.now() - Date.parse(job.startedAt) > 12_000;
+  const drag = useDraggable(`job:${job.title}`);
 
   return (
-    <div role="status" aria-live="polite" aria-label={`${job.title} progress`} className="agent-dock-card" style={{
+    <div ref={drag.ref} onPointerDownCapture={drag.onPointerDownCapture} role="status" aria-live="polite" aria-label={`${job.title} progress`} className="agent-dock-card" style={{
+      ...drag.style,
       width: "min(360px, calc(100vw - 32px))", maxHeight: "calc(100vh - 160px)", overflowY: "auto",
       background: "rgba(4,3,12,0.92)", backdropFilter: "blur(24px)",
       border: `1px solid ${AMBER}44`, borderRadius: 16,
       boxShadow: `0 0 40px ${AMBER}18, 0 8px 32px rgba(0,0,0,0.6)`,
       color: "#e8eef5", font: "14px/1.45 system-ui, -apple-system, sans-serif",
     }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "14px 16px", borderBottom: `1px solid ${AMBER}22`, background: `linear-gradient(135deg, ${AMBER}0d 0%, transparent 100%)` }}>
+      <div onPointerDown={drag.handle.onPointerDown} title={drag.handle.title} style={{ ...drag.handle.style, display: "flex", alignItems: "center", gap: 10, padding: "14px 16px", borderBottom: `1px solid ${AMBER}22`, background: `linear-gradient(135deg, ${AMBER}0d 0%, transparent 100%)` }}>
         <span aria-hidden style={{ width: 10, height: 10, borderRadius: "50%", background: failed ? "#ff6b6b" : running ? AMBER : "#34d399", animation: running ? "dl-pulse 1.2s ease-in-out infinite" : undefined, flex: "none" }} />
         <div style={{ minWidth: 0, flex: 1 }}>
           <div style={{ letterSpacing: "0.18em", fontSize: 13, fontWeight: 700, color: AMBER }}>{job.title.toUpperCase()}</div>
@@ -113,8 +116,10 @@ function AgentCard({ a, now, onClose }: { a: Activity; now: number; onClose: () 
   const running = a.steps.some(s => s.status === "running");
   const failed = !running && a.steps.at(-1)?.status === "failed";
   const last = a.steps.at(-1);
+  const drag = useDraggable(`agent:${a.key}`);
   return (
-    <div role="status" aria-live="polite" aria-label={`${a.agent} progress`} className="agent-dock-card" style={{
+    <div ref={drag.ref} onPointerDownCapture={drag.onPointerDownCapture} role="status" aria-live="polite" aria-label={`${a.agent} progress`} className="agent-dock-card" style={{
+      ...drag.style,
       width: a.key === "finance" || a.key === "trading" ? "min(420px, calc(100vw - 32px))" : "min(300px, calc(100vw - 32px))",
       maxHeight: "calc(100vh - 160px)", overflowY: "auto",
       background: "rgba(4,3,12,0.92)", backdropFilter: "blur(24px)",
@@ -122,7 +127,7 @@ function AgentCard({ a, now, onClose }: { a: Activity; now: number; onClose: () 
       boxShadow: `0 0 32px ${a.color}14, 0 8px 32px rgba(0,0,0,0.55)`,
       color: "#e8eef5", font: "14px/1.45 system-ui, -apple-system, sans-serif",
     }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", borderBottom: `1px solid ${a.color}22`, background: `linear-gradient(135deg, ${a.color}0d 0%, transparent 100%)` }}>
+      <div onPointerDown={drag.handle.onPointerDown} title={drag.handle.title} style={{ ...drag.handle.style, display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", borderBottom: `1px solid ${a.color}22`, background: `linear-gradient(135deg, ${a.color}0d 0%, transparent 100%)` }}>
         <span aria-hidden style={{ width: 9, height: 9, borderRadius: "50%", background: failed ? "#ff6b6b" : running ? a.color : "#34d399", animation: running ? "dl-pulse 1.2s ease-in-out infinite" : undefined, flex: "none" }} />
         <div style={{ minWidth: 0, flex: 1 }}>
           <div style={{ letterSpacing: "0.18em", fontSize: 12.5, fontWeight: 700, color: a.color }}>{a.agent.toUpperCase()}</div>
