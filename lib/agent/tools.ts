@@ -12,6 +12,9 @@ import { claudeComputer, isOnline, listDevices, pickDevice, runOnDevice } from "
 import { currentUserId } from "@/lib/credentials";
 import { findDesign, listDesigns } from "@/lib/designs";
 import { pickPhotos } from "@/lib/photos";
+import { analyze } from "@/lib/trading/analyst";
+import { closeTrades, describeAnalysis, getSettings, openFromAnalysis, scan, statusText, updateSettings, type Mode } from "@/lib/trading/engine";
+import type { BrokerId } from "@/lib/trading/brokers";
 import { ENGINES, setAgentEngine } from "@/lib/agentEngines";
 import { startStep } from "@/lib/activity";
 import { currentProject, knownProjects, rememberProjectList, resolveProjectRef, setCurrentProject } from "@/lib/devContext";
@@ -388,6 +391,50 @@ export const toolDefinitions: Anthropic.Tool[] = [
       },
       required: ["camera", "request"],
     },
+  },
+
+  /* ── Trading agent ── */
+  {
+    name: "analyze_market",
+    description: "The Trading agent analyses one market right now, like a disciplined professional: technicals on the daily, 4-hour and 1-hour charts, plus news and scheduled events from authoritative sources (Reuters, Bloomberg, central banks, filings…), then gives buy / sell / wait with entry, stop-loss, target, reward-to-risk and an honest confidence. Crypto (BTC, ETH, SOL…), forex and metals (EURUSD, GBPJPY, XAUUSD/gold) and stocks, ETFs and indices (AAPL, NVDA, SPY, RELIANCE.NS). Takes about 20 seconds. Set trade true only when the user explicitly asks to take the trade now; it then goes through the autopilot's limits.",
+    input_schema: {
+      type: "object",
+      properties: {
+        symbol: { type: "string", description: "Ticker or name, e.g. \"BTC\", \"EUR/USD\", \"gold\", \"TSLA\"." },
+        market: { type: "string", enum: ["crypto", "forex", "stock"], description: "Only if the symbol is ambiguous." },
+        trade: { type: "boolean", description: "True only if the user said to take the trade if the analysis supports it." },
+      },
+      required: ["symbol"],
+    },
+  },
+  {
+    name: "trading_status",
+    description: "The Trading agent's status: autopilot mode (off / paper / live), risk limits, watchlist, brokers, open trades with live profit or loss, the honest track record (win rate, profit) and its latest actions.",
+    input_schema: { type: "object", properties: {} },
+  },
+  {
+    name: "set_trading",
+    description: "Change the Trading agent's autopilot. mode \"paper\" = trade by itself with practice money; \"off\" = stop all automatic trading at once (use when they say stop trading, pause the bot, etc.). Real-money (live) mode can only be switched on from the Trading card, never by voice: if asked, tell them to open the Trading agent card. Also changes the rules: risk per trade (%), daily loss limit (%), max open positions, minimum confidence (%), how often it checks (minutes), the watchlist, and which broker each market uses (paper, alpaca for stocks, oanda for forex/gold).",
+    input_schema: {
+      type: "object",
+      properties: {
+        mode: { type: "string", enum: ["off", "paper"] },
+        risk_pct: { type: "number" }, daily_loss_pct: { type: "number" }, max_positions: { type: "number" },
+        min_confidence: { type: "number" }, interval_min: { type: "number" },
+        watchlist: { type: "array", items: { type: "string" }, description: "The full new list of markets to watch." },
+        stock_broker: { type: "string", enum: ["paper", "alpaca"] }, forex_broker: { type: "string", enum: ["paper", "oanda"] },
+      },
+    },
+  },
+  {
+    name: "close_trade",
+    description: "Close an open trade now at the market price: a market name (\"BTC\", \"EURUSD\"), a trade id, or \"all\" (with stop trading, this is the full emergency stop). Live trades close at the broker.",
+    input_schema: { type: "object", properties: { which: { type: "string" } }, required: ["which"] },
+  },
+  {
+    name: "trading_scan_now",
+    description: "Run the autopilot's scan of the whole watchlist now instead of waiting for its next round (only when the autopilot is on). Can take a few minutes.",
+    input_schema: { type: "object", properties: {} },
   },
 
   /* ── Specialists ── */
@@ -993,6 +1040,40 @@ async function runTool(name: string, input: Record<string, unknown>): Promise<To
 
     case "web_search":
       return { text: await searchWeb(String(input.query || "").slice(0, 500)) };
+    case "analyze_market": {
+      const userId = currentUserOrThrow();
+      const a = await analyze(String(input.symbol ?? ""), input.market as "crypto" | "forex" | "stock" | undefined);
+      let text = `${describeAnalysis(a)}\n(Analysis, not a guarantee: no one is right every time.)`;
+      if (input.trade === true) {
+        if (getSettings(userId).mode === "off") text += "\nNot traded: the autopilot is off. Turn on paper trading, or live trading on the Trading card.";
+        else text += `\n${await openFromAnalysis(userId, a)}`;
+      }
+      return { text };
+    }
+    case "trading_status":
+      return { text: await statusText(currentUserOrThrow()) };
+    case "set_trading": {
+      const userId = currentUserOrThrow();
+      const current = getSettings(userId);
+      const brokers = { ...current.brokers };
+      if (input.stock_broker) brokers.stock = input.stock_broker as BrokerId;
+      if (input.forex_broker) brokers.forex = input.forex_broker as BrokerId;
+      if (input.mode === "live") return { text: "Real-money trading is switched on only from the Trading agent card, where the user confirms the risk. Tell them to open it." };
+      const s = updateSettings(userId, {
+        mode: input.mode as Mode | undefined, riskPct: input.risk_pct as number | undefined, dailyLossPct: input.daily_loss_pct as number | undefined,
+        maxPositions: input.max_positions as number | undefined, minConfidence: input.min_confidence as number | undefined,
+        intervalMin: input.interval_min as number | undefined, watchlist: input.watchlist as string[] | undefined, brokers,
+      });
+      return { text: `Saved. Autopilot ${s.mode === "off" ? "is OFF" : s.mode === "paper" ? "trades with practice money" : "trades with REAL money"}; risk ${s.riskPct}% per trade, daily loss limit ${s.dailyLossPct}%, up to ${s.maxPositions} positions, confidence ≥ ${s.minConfidence}%, every ${s.intervalMin} min; watching ${s.watchlist.join(", ")}.${input.mode === "off" ? " Open trades keep their stops and targets; say \"close all trades\" to exit them now." : ""}` };
+    }
+    case "close_trade":
+      return { text: await closeTrades(currentUserOrThrow(), String(input.which ?? "")) };
+    case "trading_scan_now": {
+      const userId = currentUserOrThrow();
+      if (getSettings(userId).mode === "off") return { text: "The autopilot is off; turn on paper trading first (or live on the Trading card)." };
+      const notes = await scan(userId, true);
+      return { text: notes.length ? notes.join("\n") : "Scanned the watchlist: no market has a setup worth trading right now." };
+    }
     case "show_photo": {
       const camera = input.camera === "front" ? "front" : "back";
       return {

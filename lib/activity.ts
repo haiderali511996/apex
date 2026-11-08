@@ -34,6 +34,7 @@ function agentFor(tool: string, input: Record<string, unknown>): Agent | null {
   if (tool === "web_search") return A("researcher", "Researcher", CYAN);
   if (tool === "design_picture") return A("design", "Design", AMBER);
   if (tool === "show_photo") return A("camera", "Camera", SLATE);
+  if (/^(analyze_market|trading_status|set_trading|close_trade|trading_scan_now|trading_autopilot)$/.test(tool)) return A("trading", "Trading", CYAN);
   if (/^(remember|recall|forget)$/.test(tool)) return A("memory", "Memory", CYAN);
   if (/^(computer_|propose_computer_|mac_|propose_mac_)/.test(tool)) return A("computer", "Computer", SLATE);
   // Developer tools show their own live card from the computer's progress.
@@ -74,6 +75,11 @@ function describe(tool: string, i: Record<string, unknown>): string {
     case "propose_tiktok_post": return "Drafting a TikTok post for your approval";
     case "web_search": return `Searching the web: ${q(i.query, 60)}`;
     case "design_picture": return i.use_camera ? "Taking a photo to work on" : `Designing: ${q(i.instruction, 80)}`;
+    case "analyze_market": return `Analysing ${q(i.symbol, 30)}: charts and news${i.trade ? ", then trading if it qualifies" : ""}`;
+    case "trading_status": return "Reading positions and the track record";
+    case "set_trading": return i.mode === "off" ? "Stopping the autopilot" : "Updating the trading rules";
+    case "close_trade": return `Closing ${q(i.which, 30)}`;
+    case "trading_scan_now": case "trading_autopilot": return `Scanning the watchlist${i.mode ? ` (${i.mode})` : ""}`;
     case "show_photo": return `Taking a photo: ${q(i.request, 70)}`;
     case "remember": return `Noting: ${q(i.fact, 70)}`;
     case "recall": return i.query ? `Recalling "${q(i.query, 50)}"` : "Recalling recent notes";

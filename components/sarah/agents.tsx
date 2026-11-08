@@ -1,5 +1,6 @@
 "use client";
 import FinancePanel from "./FinancePanel";
+import TradingPanel from "./TradingPanel";
 
 /**
  * Sarah's specialists: the roster shown on the deck, what each one handles,
@@ -23,6 +24,7 @@ export const ROSTER: { key: string; name: string; color: string }[] = [
   { key: "strategist",     name: "Strategist",     color: "#00e5ff" },
   { key: "researcher",     name: "Researcher",     color: "#00e5ff" },
   { key: "finance",        name: "Finance",        color: "#00e5ff" },
+  { key: "trading",        name: "Trading",        color: "#00e5ff" },
   { key: "editor",         name: "Editor",         color: "#00e5ff" },
   { key: "sales",          name: "Sales",          color: "#f5a623" },
   { key: "marketing",      name: "Marketing",      color: "#f5a623" },
@@ -55,6 +57,9 @@ export const INFO: Record<string, AgentInfo> = {
   finance: { role: "Money watch", status: "online",
     caps: ["Stripe, PayPal and bank (Wise) balances and cash flow", "Revenue, fees and open invoices", "Monthly money recaps"],
     asks: ["How was this month?", "Is this quote priced right?"] },
+  trading: { role: "Trading desk: crypto, forex, stocks", status: "online",
+    caps: ["Analyses any market: daily, 4-hour and 1-hour charts plus news from trusted sources", "Buy / sell / wait with entry, stop-loss, target and an honest confidence", "Autopilot on paper or with real money (Alpaca, OANDA) within your risk limits", "Keeps a real track record: win rate, profit, drawdown"],
+    asks: ["Analyse Bitcoin", "How is the trading bot doing?", "Stop trading"] },
   editor: { role: "Quality gate", status: "online",
     caps: ["Rewrites and tightens every draft", "Keeps the brand voice consistent", "Final pass before anything ships"],
     asks: ["Polish this post", "Tighten this email"] },
@@ -141,7 +146,7 @@ export function AgentOverview({ sel, onClose }: { sel: NodeSel; onClose: () => v
   return (
     <div ref={panelRef} className="sarah-agent-overview" role="dialog" aria-modal="true" aria-label={`${sel.name} overview`} style={{
       position: "fixed", left: pos.x, top: pos.y,
-      width: sel.key === "finance" ? "min(440px, 92vw)" : "min(340px, 92vw)", zIndex: 60,
+      width: sel.key === "finance" || sel.key === "trading" ? "min(460px, 92vw)" : "min(340px, 92vw)", zIndex: 60,
       maxHeight: "calc(100vh - 40px)", overflowY: "auto",
       background: "rgba(4,3,12,0.92)",
       backdropFilter: "blur(24px)",
@@ -175,6 +180,7 @@ export function AgentOverview({ sel, onClose }: { sel: NodeSel; onClose: () => v
 
       <div style={{ padding: "14px 16px", display: "flex", flexDirection: "column", gap: 16 }}>
         {sel.key === "finance" && <FinancePanel color={c} />}
+        {sel.key === "trading" && <TradingPanel color={c} />}
         <div>
           <div style={{ fontSize: 9, letterSpacing: "0.14em", color: `${c}99`, marginBottom: 8, fontFamily: "var(--font-mono)" }}>WHAT IT HANDLES</div>
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>

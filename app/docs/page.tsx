@@ -66,6 +66,19 @@ const STEPS: { id: string; title: string; body: React.ReactNode }[] = [
     </>,
   },
   {
+    id: "trading", title: "4c. Trading agent (crypto, forex, stocks)",
+    body: <>
+      <p>The Trading agent analyses any market (crypto like BTC and ETH, forex pairs and gold like EURUSD and XAUUSD, and stocks, ETFs and indices like AAPL or SPY) from live prices on three timeframes and news from trusted sources, and answers buy, sell or wait with an entry, stop-loss, target and an honest confidence. Ask &quot;Analyse Bitcoin&quot; or open the Trading card on the deck.</p>
+      <ol>
+        <li><b>Paper first.</b> On the Trading card choose <b>Paper</b>: the autopilot then trades by itself with 10,000 USD of practice money and keeps a real track record (win rate, profit, worst dip). No keys needed.</li>
+        <li><b>Set your rules:</b> risk per trade (1% means a stopped-out trade loses 1% of the account), a daily loss limit that halts trading for the day, how many positions at once, the minimum confidence, how often it checks, and the watchlist.</li>
+        <li><b>Real money, when its paper record convinces you:</b> connect a broker on <Link href="/connections">Connections</Link>: <b>Alpaca</b> for US stocks and ETFs, <b>OANDA</b> for forex, gold and silver. Both offer free practice accounts (mode <code>paper</code> / <code>practice</code>) to test with first. Choose the broker for each market under Rules, then press <b>Live</b> and accept the risk. Live trading can only be switched on there, never by voice.</li>
+        <li>Every order goes in with its stop-loss and take-profit held by the broker, so they work even if the assistant is offline. Say <b>&quot;stop trading&quot;</b> to switch the autopilot off and <b>&quot;close all trades&quot;</b> to exit everything.</li>
+      </ol>
+      <p>Binance and Bybit (crypto) are coming through the desktop app, because they don&apos;t accept connections from US servers. This is analysis, not financial advice: no person or AI is right every time, and trading can lose money. Only risk what you can afford to lose.</p>
+    </>,
+  },
+  {
     id: "social", title: "5. Facebook, Instagram, X and TikTok",
     body: <ul>
       <li><b>Facebook & Instagram:</b> in <a href="https://developers.facebook.com/tools/explorer/" target="_blank" rel="noreferrer">Graph API Explorer</a>, get a long-lived Page access token, your Page ID and (for Instagram) your business account ID.</li>

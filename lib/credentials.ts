@@ -93,6 +93,26 @@ export const GROUPS: Group[] = [
     link: { href: "https://wise.com/settings/api-tokens", text: "Create a read-only Wise token" },
     fields: [{ key: "WISE_API_TOKEN", label: "Read-only API token", secret: true }],
   },
+  {
+    id: "alpaca", title: "Alpaca (Trading agent: US stocks)",
+    why: "Lets the Trading agent place real or paper stock trades, each with its stop-loss and take-profit attached at the broker. Start with a paper account (free, fake money) and switch the mode to live only when you're ready. Trading risks real money; nothing is guaranteed.",
+    link: { href: "https://app.alpaca.markets/paper/dashboard/overview", text: "Get Alpaca API keys" },
+    fields: [
+      { key: "ALPACA_KEY_ID", label: "API key ID" },
+      { key: "ALPACA_SECRET_KEY", label: "Secret key", secret: true },
+      { key: "ALPACA_MODE", label: "Mode", optional: true, placeholder: "paper — or live for real money" },
+    ],
+  },
+  {
+    id: "oanda", title: "OANDA (Trading agent: forex and gold)",
+    why: "Lets the Trading agent trade forex pairs, gold and silver on your OANDA account, each trade with its stop-loss and take-profit attached. Use a practice account first. Trading with leverage can lose more than you expect; nothing is guaranteed.",
+    link: { href: "https://www.oanda.com/account/tpa/personal_token", text: "Create an OANDA API token" },
+    fields: [
+      { key: "OANDA_API_TOKEN", label: "API token", secret: true },
+      { key: "OANDA_ACCOUNT_ID", label: "Account ID", placeholder: "101-001-1234567-001" },
+      { key: "OANDA_MODE", label: "Mode", optional: true, placeholder: "practice — or live for real money" },
+    ],
+  },
 ];
 
 /** Keys that also arrive by OAuth rather than being typed in. */
@@ -171,6 +191,11 @@ const context = new AsyncLocalStorage<Context>();
  */
 export function enterUser(userId: string, owner: boolean) {
   context.enterWith({ userId, owner, values: loadCredentials(userId) });
+}
+
+/** Runs background work (no request) as one account, on its own keys. */
+export function runAsUser<T>(userId: string, owner: boolean, fn: () => Promise<T>): Promise<T> {
+  return context.run({ userId, owner, values: loadCredentials(userId) }, fn);
 }
 
 export function currentUserId(): string | undefined {

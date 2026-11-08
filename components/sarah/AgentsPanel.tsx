@@ -3,7 +3,7 @@
 import { INFO, ROSTER, STATUS_LINE, type NodeSel } from "./agents";
 
 const GROUPS: { title: string; keys: string[] }[] = [
-  { title: "Core", keys: ["chief_of_staff", "memory", "strategist", "researcher", "finance", "editor"] },
+  { title: "Core", keys: ["chief_of_staff", "memory", "strategist", "researcher", "finance", "trading", "editor"] },
   { title: "Specialists", keys: ["sales", "marketing", "ops", "social_media", "engineering", "design", "developer"] },
   { title: "Integrations", keys: ["analytics", "crm", "calendar", "email", "drive"] },
 ];
