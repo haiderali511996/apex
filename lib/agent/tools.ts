@@ -8,7 +8,7 @@ import { createPendingAction, listPendingActions, listActionLog, getProjectNames
 import { askSpecialist } from "./specialist";
 import { SPECIALISTS, specialistKeys } from "./roles";
 import { askAboutChats, askDeveloper, listProjects, nameProject, resolveProject } from "./developer";
-import { claudeComputer, isOnline, listDevices, pickDevice, runOnDevice } from "@/lib/devices";
+import { claudeComputer, isOnline, listDevices, pickDevice, queueOnDevice, runOnDevice } from "@/lib/devices";
 import { currentUserId } from "@/lib/credentials";
 import { findDesign, listDesigns } from "@/lib/designs";
 import { pickPhotos, savePhoto } from "@/lib/photos";
@@ -345,12 +345,13 @@ export const toolDefinitions: Anthropic.Tool[] = [
 
   {
     name: "propose_developer_task",
-    description: "Queue a task for the Developer (Claude Code on the user's computer) that runs terminal commands or changes files in a project — git pull, installing dependencies, running tests or the build, fixing a bug, making an edit, writing a blog post or page with pictures the Design agent made (pass design_ids). Nothing runs until the user approves it in the UI; then Claude Code does it with the terminal and reports back. Use this instead of telling the user to run commands themselves.",
+    description: "Give the Developer (Claude Code on the user's computer) a task that runs terminal commands or changes files in a project — git pull, installing dependencies, running tests or the build, fixing a bug, making an edit, adding blog posts or pages (with pictures the Design agent made: design_ids). Local work starts at once with no approval, and the user watches it on the Developer card. Only work that goes outside their computer — git push, merging into main, deploying or touching a live server — waits for their approval (set goes_live). Use this instead of telling the user to run commands themselves.",
     input_schema: {
       type: "object",
       properties: {
         project: { type: "string", description: "Project name (as spoken is fine), \"project/subfolder\" (e.g. \"unc/web-next\"), or a folder path. Omit to use the current project." },
         task: { type: "string", description: "Exactly what to do, written out in full for a developer who hasn't heard the conversation. For a bug: the user's own words about it (quoted), what they see vs what should happen, where (page, URL, localhost port, API, container), any error text, and that it must be fixed and checked on their local setup (it may run in Docker) before anything is pushed. E.g. \"Run git pull origin main and report what changed.\"" },
+        goes_live: { type: "boolean", description: "True when the task pushes to GitHub (git push), merges into main/master, deploys, or changes a live server or production database. That needs the user's approval; everything local runs at once." },
         fresh: { type: "boolean", description: "True when this is new work unrelated to the Developer's previous task in this project, so it starts a clean session. Leave false for a follow-up on the same work (\"still not fixed\", \"now also…\"), so it continues with what it already tried." },
         design_ids: { type: "array", items: { type: "string" }, description: "Pictures the Design agent made, to use in the work (a blog post, a page, the app): ids from list_designs, or \"latest\", \"latest:3\" for the newest three. The Developer downloads them into the project." },
         photo_ids: { type: "array", items: { type: "string" }, description: "Photos or screenshots the user showed you (their ids from the conversation, or \"latest\"), e.g. of a bug, an error on screen or a layout to copy. The Developer downloads them and looks at them before working." },
@@ -507,31 +508,45 @@ export const toolDefinitions: Anthropic.Tool[] = [
   },
   {
     name: "computer_run",
-    description: "Everyday actions on a linked computer: list_apps, list_chrome_profiles, set_volume (level: 0–100, \"mute\" or \"unmute\"), media (action: play or pause).",
+    description: "Everyday actions on a linked computer: list_apps, list_chrome_profiles, set_volume (level: 0–100, \"mute\" or \"unmute\"). For music use computer_music.",
     input_schema: {
       type: "object",
       properties: {
         action: { type: "string", enum: ["list_apps", "list_chrome_profiles", "set_volume", "media"] },
         level: { type: "string", description: "For set_volume." },
-        media_action: { type: "string", enum: ["play", "pause"], description: "For media." },
+        media_action: { type: "string", enum: ["play", "pause"], description: "Old; use computer_music." },
         computer: { type: "string" },
       },
       required: ["action"],
     },
   },
   {
-    name: "propose_computer_quit_app",
-    description: "Queue quitting an app on a linked computer. It may lose unsaved work, so nothing happens until the user approves it.",
-    input_schema: { type: "object", properties: { name: { type: "string" }, computer: { type: "string" } }, required: ["name"] },
+    name: "computer_music",
+    description: "Music on the user's computer, at once (no approval). Default place is Chrome: \"play music\", \"play some Arijit Singh\", \"play lofi\" plays it from YouTube in a background Chrome tab; \"pause\", \"stop the music\", \"resume\", \"next song\" control what Chrome is playing and leave the computer's own apps alone. Only when they say from the laptop / PC / computer itself, or name Spotify or Apple Music, use place \"computer\" (its own music app).",
+    input_schema: {
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["play", "pause", "resume", "next", "stop"] },
+        query: { type: "string", description: "For play: song, artist, album, genre or mood in their words; empty for something pleasant." },
+        place: { type: "string", enum: ["chrome", "computer"], description: "\"chrome\" (default) or \"computer\" for its own music app." },
+        computer: { type: "string" },
+      },
+      required: ["action"],
+    },
   },
   {
-    name: "propose_computer_power",
-    description: "Queue restarting, shutting down or sleeping a linked computer. Nothing happens until the user approves it.",
+    name: "computer_quit_app",
+    description: "Close an app on a linked computer, at once. With force, it closes even if it would ask to save.",
+    input_schema: { type: "object", properties: { name: { type: "string" }, force: { type: "boolean" }, computer: { type: "string" } }, required: ["name"] },
+  },
+  {
+    name: "computer_power",
+    description: "Shut down, restart or sleep a linked computer, at once — no approval. Shut down and restart close every open app first (forced, without save prompts). Say in one line that it's going down.",
     input_schema: { type: "object", properties: { action: { type: "string", enum: ["restart", "shut down", "sleep"] }, computer: { type: "string" } }, required: ["action"] },
   },
   {
     name: "propose_computer_script",
-    description: "For any other task on a linked computer: write a short script and queue it. Nothing runs until the user reads and approves it. Set language to what the script is written in: \"shell\" for terminal commands (zsh on macOS, bash on Linux), \"applescript\" for AppleScript on macOS, \"powershell\" on Windows (check computer_list for the system). Never use this for specs, hardware or battery — computer_system_info answers those at once, without approval.",
+    description: "For any other task on a linked computer: write a short script; it runs at once and you get its output. Only scripts that delete files, use sudo, kill processes, erase disks, change system settings, push code or deploy wait for the user's approval. Set language to what the script is written in: \"shell\" for terminal commands (zsh on macOS, bash on Linux), \"applescript\" for AppleScript on macOS, \"powershell\" on Windows (check computer_list for the system). Never use this for specs, hardware or battery — computer_system_info answers those at once, without approval.",
     input_schema: { type: "object", properties: { purpose: { type: "string" }, script: { type: "string" }, language: { type: "string", enum: ["shell", "applescript", "powershell"] }, computer: { type: "string" } }, required: ["purpose", "script", "language"] },
   },
   /* ── This Mac: apps, Chrome profiles, websites ── */
@@ -626,6 +641,13 @@ function reportToText(r: Report): string {
 export type ToolRunResult = { text: string; pendingAction?: PendingAction; clientAction?: ClientAction };
 
 /** Added to every Developer task. */
+/** Scripts that can lose data or change the system: these still wait for approval. */
+const RISKY_SCRIPT = /\brm\s+-[a-z]*[rf]|\bsudo\b|\bkill(all)?\b|\bpkill\b|\bdiskutil\b|\bmkfs|\bformat\s+[a-z]:|\bRemove-Item\b|\bdel\s+\/[sq]|\brmdir\b|\bshred\b|\bdd\s+if=|\bdefaults\s+(write|delete)\b|\bcsrutil\b|\bnvram\b|\bReg(?:istry)?\b.*\b(Set|Remove|Delete)|\bSet-ItemProperty\b|\bgit\s+(push|reset\s+--hard|clean)\b|\bdeploy\b|\bssh\b|\bscp\b|\bcurl\b[^|\n]*\|\s*(ba|z)?sh|\bchmod\s+-R|\bchown\s+-R|\bdrop\s+(table|database)\b|\btruncate\b|\bdocker\s+(system\s+prune|volume\s+rm|compose\s+down\s+-v)|\bempty trash\b|\bdelete\b/i;
+
+/** Work that leaves the user's computer: pushing, merging into main, deploying, live servers. */
+const GOES_LIVE = /\bgit\s+push\b|\bpush(?:ed|ing)?\b[^.\n]{0,40}\b(?:github|gitlab|origin|remote|repo|main|master)\b|\b(?:deploy|deployment|go(?:es)?\s+live|production|prod server|live (?:site|server))\b|\bmerge\b[^.\n]{0,30}\b(?:main|master)\b/i;
+const LOCAL_ONLY = "This task runs without asking the user, because it is local work only: do not git push, merge into main or master, deploy, or change any live server or production database. If finishing it needs any of that, do everything local, then say a separate approved step is needed to push or go live. Committing locally on the current branch is fine when the task asks for it.";
+
 const GIT_RULE = "Git rule: before any git push, first run git pull on that branch (fetch and integrate the remote changes the way the project does, merge or rebase) and make sure it still builds; if the pull brings conflicts, stop and report them instead of pushing or forcing.";
 
 /**
@@ -954,8 +976,15 @@ async function runTool(name: string, input: Record<string, unknown>): Promise<To
         const userId = currentUserOrThrow(), device = devComputer(userId);
         const project = await projectOnComputer(input.project as string | undefined);
         setCurrentProject(userId, project);
-        const pending = await createPendingAction({ platform: "computer", kind: "device_command", summary: `Claude Code on ${device.name}, in ${project}: ${input.task}`, payload: { userId, deviceId: device.id, action: "dev_task", args: { project, task: input.task, fresh: input.fresh === true } } });
-        return { text: `Task queued for approval (id ${pending.id}). Nothing has run yet; Claude Code on ${device.name} starts once it's approved.`, pendingAction: pending };
+        // Pushing, merging into main or deploying waits for the user; local work starts now.
+        const live = input.goes_live === true || GOES_LIVE.test(String(input.task));
+        const args = { project, task: live ? input.task : `${input.task}\n\n${LOCAL_ONLY}`, fresh: input.fresh === true };
+        if (!live) {
+          queueOnDevice(userId, device.id, "dev_task", args);
+          return { text: `Started: Claude Code on ${device.name} is working on it in ${project} now (no approval needed for local work). The user can follow it on the Developer card; its report appears there when done. Tell them in one short line.` };
+        }
+        const pending = await createPendingAction({ platform: "computer", kind: "device_command", summary: `Claude Code on ${device.name}, in ${project} (goes live — push or deploy): ${input.task}`, payload: { userId, deviceId: device.id, action: "dev_task", args } });
+        return { text: `This pushes or goes live, so it's waiting for the user's approval (id ${pending.id}). Nothing has run yet.`, pendingAction: pending };
       }
       const project = await resolveProject(input.project as string);
       if ("error" in project) return { text: project.error };
@@ -1000,6 +1029,31 @@ async function runTool(name: string, input: Record<string, unknown>): Promise<To
       const args = action === "set_volume" ? { level: input.level } : action === "media" ? { action: input.media_action } : {};
       return { text: `${device.name}: ${await runOnDevice(userId, device.id, action, args)}` };
     }
+    case "computer_music": {
+      const userId = currentUserOrThrow(), device = pickDevice(userId, input.computer as string | undefined);
+      const action = String(input.action ?? "play"), query = String(input.query ?? "").trim();
+      const chrome = input.place !== "computer";
+      try {
+        if (chrome) return { text: `${device.name}: ${await runOnDevice(userId, device.id, "chrome_music", { action, query }, 40_000)}` };
+        const local = action === "resume" ? "play" : action === "stop" ? "pause" : action;
+        return { text: `${device.name}: ${await runOnDevice(userId, device.id, "media", { action: local, query }, 40_000)}` };
+      } catch (err) {
+        if (/Unknown action chrome_music/i.test(String((err as Error)?.message))) return { text: `The desktop app on ${device.name} is out of date and can't play music in Chrome yet. Tell the user to update it from the Download page (it shows "Update" in its menu).` };
+        throw err;
+      }
+    }
+    case "computer_quit_app": {
+      const userId = currentUserOrThrow(), device = pickDevice(userId, input.computer as string | undefined);
+      return { text: `${device.name}: ${await runOnDevice(userId, device.id, "quit_app", { name: input.name, force: input.force === true }, 20_000)}` };
+    }
+    case "computer_power": {
+      const userId = currentUserOrThrow(), device = pickDevice(userId, input.computer as string | undefined);
+      const what = String(input.action);
+      if (!["restart", "shut down", "sleep"].includes(what)) return { text: "action must be restart, shut down or sleep." };
+      // The computer may be gone before it answers.
+      const said = await runOnDevice(userId, device.id, "power", { action: what }, 15_000).catch(() => "Sent to the computer.");
+      return { text: `${device.name}: ${said}` };
+    }
     case "propose_computer_quit_app":
     case "propose_computer_power":
     case "propose_computer_script": {
@@ -1008,6 +1062,11 @@ async function runTool(name: string, input: Record<string, unknown>): Promise<To
         return { text: "Refused: that script kills every program of that kind on the computer (the code editor, the desktop app, other projects). To stop one dev server, ask the Developer to stop that project's server by its port; a stuck Developer card closes by itself once its time limit passes." };
       }
       const userId = currentUserOrThrow(), device = pickDevice(userId, input.computer as string | undefined);
+      // Everyday scripts run straight away; only risky ones wait for the user.
+      if (name === "propose_computer_script" && !RISKY_SCRIPT.test(String(input.script ?? ""))) {
+        const out = await runOnDevice(userId, device.id, "run_script", { script: input.script, language: input.language }, 70_000);
+        return { text: `${device.name}: ${out}` };
+      }
       const [action, args, summary] = name === "propose_computer_quit_app" ? ["quit_app", { name: input.name }, `Quit ${input.name} on ${device.name}`]
         : name === "propose_computer_power" ? ["power", { action: input.action }, `${String(input.action)[0].toUpperCase()}${String(input.action).slice(1)} ${device.name}`]
         : ["run_script", { script: input.script, language: input.language }, `On ${device.name} (${device.os}), ${String(input.language || "script")}: ${input.purpose}\n\n${input.script}`];

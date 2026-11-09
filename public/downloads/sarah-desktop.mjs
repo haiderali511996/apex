@@ -318,9 +318,99 @@ const VERIFY_BRIEF = `How to work, so the fix is real:
 3. Fix the root cause, not the symptom. Keep the change as small as it can be.
 4. Apply it where it runs: restart or rebuild only the affected service (docker compose up -d --build <service>, or restart its dev server); run database migrations the project defines if the fix needs them. Never run docker compose down -v, delete volumes, drop or reset databases, or kill processes you didn't start.
 5. Verify on localhost the same way you reproduced it, and run the project's lint, type check and tests that cover the change. If it still fails, keep going: read the new error and fix again.
-6. Report honestly: say "verified" only for what you actually checked and saw working, with the command and its result; if you couldn't verify or finish, say exactly what is left and why.`;
+6. Databases and content in Docker: the database usually lives inside a container, so a command run on the host can't reach it (or reaches an empty local one). Read the compose file and .env to see which service holds the database and which connection URL the app uses; run migrations, seeds, scripts and SQL inside the right container (docker compose exec <app-service> npm run …, or docker compose exec <db-service> psql/mysql …). "Table/schema doesn't exist" means migrations haven't run there: run the project's own migration command (prisma migrate deploy / db push, drizzle, typeorm, knex, sequelize, django migrate, artisan migrate…), never a reset. To add content (blog posts, products, pages), use the app's own way: its API, admin endpoints, ORM or seed script, filling every required field (slug, author, status/published, dates, images) the way existing rows do; then open the page on localhost and confirm each item shows. For many items, make and check them one by one, and report how many exist at the end.
+7. Report honestly: say "verified" only for what you actually checked and saw working, with the command and its result; if you couldn't verify or finish, say exactly what is left and why.`;
 
 const TASK_BRIEF = `${DEV_BRIEF} The user approved this exact task; do it now in this project with the terminal and file tools. Do only what it asks. Don't push, force-push, delete branches, deploy, or remove files beyond the task unless it says so. If something could lose work (uncommitted changes in the way, conflicts, a failing migration), stop and report instead of forcing it. Git rule: before any git push, first run git pull on that branch (fetch and integrate the remote changes the way the project does, merge or rebase) and make sure it still builds; if the pull brings conflicts, stop and report them instead of pushing or forcing. Finish with a short report: first sentence says what happened, then the commands you ran.`;
+
+// ── Music helpers ──
+
+/** The first YouTube video for a search, from the public results page. */
+async function youtubeFirst(query) {
+  const res = await fetch(`https://www.youtube.com/results?search_query=${encodeURIComponent(query)}&hl=en`, { headers: { "accept-language": "en", "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130 Safari/537.36" }, signal: AbortSignal.timeout(15_000) });
+  const html = await res.text();
+  return /"videoRenderer":\{"videoId":"([\w-]{11})"/.exec(html)?.[1] ?? /"videoId":"([\w-]{11})"/.exec(html)?.[1] ?? null;
+}
+
+/** Presses a media key on Windows (0xB3 play/pause, 0xB0 next, 0xB1 previous); Chrome answers it while it plays. */
+async function mediaKeyWindows(vk) {
+  await powershell(`$s='[DllImport("user32.dll")] public static extern void keybd_event(byte b,byte s,uint f,UIntPtr e);'; $k=Add-Type -MemberDefinition $s -Name K -Namespace W -PassThru; $k::keybd_event(${vk},0,0,[UIntPtr]::Zero); $k::keybd_event(${vk},0,2,[UIntPtr]::Zero)`);
+}
+
+const MUSIC_TABS = "youtube.com|music.youtube.com|spotify.com|soundcloud.com|deezer.com|music.apple.com|gaana.com|jiosaavn.com|wynk.in|tidal.com|pandora.com";
+const JS_OFF = "Chrome blocks this until a one-time setting is on: in Chrome's menu bar choose View → Developer → Allow JavaScript from Apple Events. Then ask again.";
+
+/** Runs JavaScript in every Chrome tab with music; returns how many tabs answered "yes". */
+async function inMusicTabs(js) {
+  const out = await osascript(`on run argv
+    set pat to item 1 of argv
+    set js to item 2 of argv
+    set n to 0
+    if application "Google Chrome" is not running then return "0"
+    tell application "Google Chrome"
+      repeat with w in windows
+        repeat with t in tabs of w
+          set u to URL of t
+          set hit to false
+          set AppleScript's text item delimiters to "|"
+          repeat with p in text items of pat
+            if u contains (p as text) then set hit to true
+          end repeat
+          if hit then
+            set r to execute t javascript js
+            if r is "yes" then set n to n + 1
+          end if
+        end repeat
+      end repeat
+    end tell
+    return n as text
+  end run`, [MUSIC_TABS, js]);
+  return Number(out) || 0;
+}
+
+async function chromeMac(js, done, none) {
+  try {
+    return (await inMusicTabs(js)) ? done : none;
+  } catch (err) {
+    if (/JavaScript through AppleScript is turned off|Allow JavaScript from Apple Events/i.test(String(err?.message))) throw new Error(JS_OFF);
+    throw err;
+  }
+}
+
+async function chromeMusicPause(stop = false) {
+  const js = `(()=>{let n=0;document.querySelectorAll('video,audio').forEach(m=>{if(!m.paused){m.pause();n++}});return n?'yes':'no'})()`;
+  if (PLATFORM === "darwin") {
+    const said = await chromeMac(js, stop ? "Stopped the music in Chrome." : "Paused the music in Chrome.", "Nothing is playing in Chrome.");
+    return said;
+  }
+  if (PLATFORM === "win32") { await mediaKeyWindows(0xB3); return "Paused Chrome (pressed play/pause)."; }
+  await sh("playerctl", ["-p", "chromium,chrome", "pause"]);
+  return "Paused the music in Chrome.";
+}
+
+async function chromeMusicResume() {
+  const js = `(()=>{const m=[...document.querySelectorAll('video,audio')].find(m=>m.paused&&m.currentTime>0);if(!m)return 'no';m.play();return 'yes'})()`;
+  if (PLATFORM === "darwin") return chromeMac(js, "Playing again in Chrome.", "Nothing paused in Chrome to resume — say what to play.");
+  if (PLATFORM === "win32") { await mediaKeyWindows(0xB3); return "Resumed Chrome (pressed play/pause)."; }
+  await sh("playerctl", ["-p", "chromium,chrome", "play"]);
+  return "Playing again in Chrome.";
+}
+
+async function chromeMusicNext() {
+  const js = `(()=>{const b=document.querySelector('.ytp-next-button, ytmusic-player-bar .next-button, [data-testid=control-button-skip-forward]');if(!b)return 'no';b.click();return 'yes'})()`;
+  if (PLATFORM === "darwin") return chromeMac(js, "Next song in Chrome.", "There's no next song in Chrome.");
+  if (PLATFORM === "win32") { await mediaKeyWindows(0xB0); return "Next song."; }
+  await sh("playerctl", ["-p", "chromium,chrome", "next"]);
+  return "Next song.";
+}
+
+/** Apps the user has open (not the desktop app itself or the system's own), for shutting down. */
+async function userAppPids() {
+  if (PLATFORM !== "darwin") return [];
+  const out = await osascript(`tell application "System Events" to get unix id of every application process whose background only is false`).catch(() => "");
+  const keep = new Set([process.pid, process.ppid]);
+  return out.split(/,\s*/).map(Number).filter(n => n > 1 && !keep.has(n));
+}
 
 export const ACTIONS = {
   async open_app({ name }) {
@@ -385,20 +475,63 @@ export const ACTIONS = {
     return v === "mute" || v === "unmute" ? `${v[0].toUpperCase()}${v.slice(1)}d.` : `Volume set to ${v}%.`;
   },
 
-  async media({ action }) {
-    if (action !== "play" && action !== "pause") throw new Error("media action must be play or pause.");
+  // The computer's own music apps (Apple Music, Spotify; on Windows and Linux
+  // the system's play/pause). Chrome is chrome_music.
+  async media({ action, query }) {
+    if (!["play", "pause", "next", "previous"].includes(action)) throw new Error("media action must be play, pause, next or previous.");
     if (PLATFORM === "darwin") {
-      const done = [];
-      for (const app of ["Music", "Spotify"]) {
-        if ((await osascript(`application "${app}" is running`)) !== "true") continue;
-        await osascript(`tell application "${app}" to ${action}`);
-        done.push(app);
+      const running = async (app) => (await osascript(`application "${app}" is running`).catch(() => "false")) === "true";
+      const verb = { play: "play", pause: "pause", next: "next track", previous: "previous track" }[action];
+      if (action === "play" && query) {
+        // A song, artist or album from the Music library.
+        const out = await osascript(`on run argv
+          set q to item 1 of argv
+          tell application "Music"
+            set hits to (every track of library playlist 1 whose name contains q or artist contains q or album contains q)
+            if hits is {} then return "none"
+            play item 1 of hits
+            return (name of item 1 of hits) & " by " & (artist of item 1 of hits)
+          end tell
+        end run`, [query]).catch(() => "none");
+        if (out !== "none") return `Playing ${out} in Music.`;
+        if (await running("Spotify")) { await osascript(`tell application "Spotify" to play`); return `"${query}" isn't in the Music library, so I resumed Spotify.`; }
+        return `"${query}" isn't in the Music library on this computer. Say "play ${query}" (without "from my laptop") and I'll play it in Chrome.`;
       }
-      return done.length ? `${action === "play" ? "Playing" : "Paused"} ${done.join(" and ")}.` : "Neither Music nor Spotify is open.";
+      const apps = [];
+      for (const app of ["Spotify", "Music"]) if (await running(app)) apps.push(app);
+      if (!apps.length && action === "play") { await osascript(`tell application "Music" to play`); return "Playing your Music library."; }
+      for (const app of apps) await osascript(`tell application "${app}" to ${verb}`);
+      return apps.length ? `${{ play: "Playing", pause: "Paused", next: "Skipped to the next track in", previous: "Back a track in" }[action]} ${apps.join(" and ")}.` : "No music app is playing on this computer.";
     }
-    if (PLATFORM === "win32") { await powershell("(New-Object -ComObject WScript.Shell).SendKeys([char]179)"); return "Pressed play/pause."; }
-    await sh("playerctl", [action]);
-    return action === "play" ? "Playing." : "Paused.";
+    const key = { play: 0xB3, pause: 0xB3, next: 0xB0, previous: 0xB1 }[action];
+    if (PLATFORM === "win32") { await mediaKeyWindows(key); return action === "play" || action === "pause" ? "Pressed play/pause." : "Skipped."; }
+    await sh("playerctl", [action === "previous" ? "previous" : action]);
+    return action === "play" ? "Playing." : action === "pause" ? "Paused." : "Skipped.";
+  },
+
+  /**
+   * Music in Chrome, in the background: play finds the song (or a mix for a
+   * mood or genre) on YouTube and plays it in a Chrome tab without bringing
+   * Chrome to the front; pause, resume, next and stop control what Chrome is
+   * playing, leaving the computer's own music apps alone.
+   */
+  async chrome_music({ action, query }) {
+    if (action === "play") {
+      const q = String(query || "").trim() || "relaxing music mix";
+      const id = await youtubeFirst(q);
+      if (!id) throw new Error(`YouTube found nothing for "${q}".`);
+      // The video's own mix keeps music going after it ends.
+      const url = `https://www.youtube.com/watch?v=${id}&list=RD${id}`;
+      await chromeMusicPause().catch(() => {}); // one thing at a time
+      if (PLATFORM === "darwin") await sh("open", ["-g", "-a", "Google Chrome", url]);
+      else if (PLATFORM === "win32") await powershell(`Start-Process ${psq(chromeBinary())} -ArgumentList ${psq(url)} -WindowStyle Minimized`);
+      else run(chromeBinary(), [url], { detached: true }).catch(() => {});
+      return `Playing "${q}" from YouTube in Chrome, in the background.`;
+    }
+    if (action === "pause" || action === "stop") return chromeMusicPause(action === "stop");
+    if (action === "resume") return chromeMusicResume();
+    if (action === "next") return chromeMusicNext();
+    throw new Error("chrome_music action must be play, pause, resume, next or stop.");
   },
 
   // Read-only: what this computer is — model, processor, graphics, memory, storage and system.
@@ -446,27 +579,42 @@ if (-not $b) { "Battery: none (desktop computer)" } else {
       `Memory: ${gb(os.totalmem())}`, await disk(), `System: ${release} (kernel ${os.release()})`, await linuxBattery(read)].join("\n");
   },
 
-  // Sent only after the user approved it in the app.
-  async quit_app({ name }) {
-    if (PLATFORM === "darwin") await osascript(`on run argv
-      tell application (item 1 of argv) to quit
-    end run`, [name]);
-    else if (PLATFORM === "win32") await powershell(`Get-Process -Name ${psq(name.replace(/\.exe$/i, ""))} -ErrorAction Stop | ForEach-Object { $_.CloseMainWindow() | Out-Null }`);
-    else await sh("pkill", ["-x", name]);
-    return `Asked ${name} to quit.`;
+  // Asks the app to quit; with force, closes it even if it would ask to save.
+  async quit_app({ name, force }) {
+    if (PLATFORM === "darwin") {
+      await osascript(`on run argv
+        tell application (item 1 of argv) to quit
+      end run`, [name]).catch(() => {});
+      if (force) { await new Promise(r => setTimeout(r, 3000)); await sh("pkill", ["-9", "-x", name]).catch(() => {}); }
+    }
+    else if (PLATFORM === "win32") await powershell(force ? `Stop-Process -Name ${psq(name.replace(/\.exe$/i, ""))} -Force -ErrorAction Stop` : `Get-Process -Name ${psq(name.replace(/\.exe$/i, ""))} -ErrorAction Stop | ForEach-Object { $_.CloseMainWindow() | Out-Null }`);
+    else await sh("pkill", [...(force ? ["-9"] : []), "-x", name]);
+    return force ? `Closed ${name}.` : `Asked ${name} to quit.`;
   },
 
-  // Sent only after the user approved it in the app.
+  // Restart and shut down close every open app first, without waiting for
+  // "save changes?" dialogs (asked to quit, then forced after a few seconds).
   async power({ action }) {
     const what = { restart: 0, "shut down": 1, sleep: 2 }[action];
     if (what === undefined) throw new Error("power action must be restart, shut down or sleep.");
-    if (PLATFORM === "darwin") await osascript(`tell application "System Events" to ${action}`);
-    else if (PLATFORM === "win32") await (what === 2 ? sh("rundll32.exe", ["powrprof.dll,SetSuspendState", "0,1,0"]) : sh("shutdown", [what === 0 ? "/r" : "/s", "/t", "5"]));
-    else await sh("systemctl", [what === 0 ? "reboot" : what === 1 ? "poweroff" : "suspend"]);
-    return action === "sleep" ? "Going to sleep." : `Going to ${action}.`;
+    // Answer first, so the user hears it before the computer goes.
+    setTimeout(() => { void (async () => {
+      if (PLATFORM === "darwin") {
+        if (what !== 2) {
+          const pids = await userAppPids();
+          for (const pid of pids) { try { process.kill(pid, "SIGTERM"); } catch { /* already gone */ } }
+          await new Promise(r => setTimeout(r, 4000));
+          for (const pid of pids) { try { process.kill(pid, "SIGKILL"); } catch { /* closed */ } }
+        }
+        await osascript(`tell application "System Events" to ${action}`).catch(() => {});
+      }
+      else if (PLATFORM === "win32") await (what === 2 ? sh("rundll32.exe", ["powrprof.dll,SetSuspendState", "0,1,0"]) : sh("shutdown", [what === 0 ? "/r" : "/s", "/f", "/t", "3"]));
+      else await sh("systemctl", [what === 0 ? "reboot" : what === 1 ? "poweroff" : "suspend", "-i"]);
+    })().catch(() => {}); }, 1500);
+    return action === "sleep" ? "Going to sleep." : `Closing all apps and going to ${action}.`;
   },
 
-  // Sent only after the user read and approved the script in the app.
+  // Everyday scripts run directly; risky ones only after the user approved them.
   async run_script({ script, language }) {
     if (!script) throw new Error("Empty script.");
     // language says what the script is: terminal commands, AppleScript or PowerShell.

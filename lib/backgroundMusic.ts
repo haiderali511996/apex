@@ -35,12 +35,14 @@ export const toggleMusic = () => sendMusicCommand("toggle");
 export const musicOff = () => sendMusicCommand("off");
 export const musicOn = () => sendMusicCommand("on");
 
-// What the user says to switch the music, in English or Roman Urdu.
-const MUSIC = /\b(music|song|songs|gaana|gana|gaane|gane|background music)\b/i;
+// What the user says to switch Sarah's own background music, in English or
+// Roman Urdu. Only when they say background music: "play music" and "pause the
+// music" mean their computer (Chrome), which Sarah does with computer_music.
+const MUSIC = /\b(background|ambient|deck)\s+(music|song|songs|gaana|gana|gaane|gane)\b|\b(music|gaana|gana)\s+(in|of)\s+the\s+background\b/i;
 const OFF = /\b(pause|stop|mute|off|band|bund|rok|roko|rokein|rokain|hatao|silence)\b/i;
 const ON = /\b(play|start|resume|unmute|on|chala|chalao|chalaen|chalain|chalayein|lagao|laga do|shuru)\b/i;
 
-/** "pause the music", "music band karo" → off; "play music", "gaana chalao" → on. */
+/** "pause the background music", "background music band karo" → off; "play background music" → on. */
 export function musicCommand(text: string): "on" | "off" | null {
   if (!MUSIC.test(text) || text.length > 80) return null;
   if (OFF.test(text)) return "off";

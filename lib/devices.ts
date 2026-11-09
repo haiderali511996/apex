@@ -145,6 +145,14 @@ export function pickDevice(userId: string, name?: string): Device {
   return chosen;
 }
 
+/** Sends a command without waiting: long jobs (the Developer) report on their card. */
+export function queueOnDevice(userId: string, deviceId: string, action: string, args: Record<string, unknown>): string {
+  const d = db(), id = randomUUID(), now = new Date().toISOString();
+  d.prepare("INSERT INTO device_commands (id, device_id, user_id, action, args, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'queued', ?, ?)")
+    .run(id, deviceId, userId, action, JSON.stringify(args), now, now);
+  return id;
+}
+
 /** Sends a command and waits for the computer's answer. */
 export async function runOnDevice(userId: string, deviceId: string, action: string, args: Record<string, unknown>, timeoutMs = 30_000): Promise<string> {
   const d = db(), id = randomUUID(), now = new Date().toISOString();
