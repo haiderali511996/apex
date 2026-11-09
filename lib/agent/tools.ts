@@ -974,6 +974,10 @@ async function runTool(name: string, input: Record<string, unknown>): Promise<To
     case "propose_computer_quit_app":
     case "propose_computer_power":
     case "propose_computer_script": {
+      // Killing by a broad name takes down the editor, the desktop app itself and everything else built on Node.
+      if (name === "propose_computer_script" && /\b(pkill|killall)\b[^\n]*\b(node|npm|npx|python|java|claude|electron|code)\b|\bkill\s+-9\s+-1\b/i.test(String(input.script ?? ""))) {
+        return { text: "Refused: that script kills every program of that kind on the computer (the code editor, the desktop app, other projects). To stop one dev server, ask the Developer to stop that project's server by its port; a stuck Developer card closes by itself once its time limit passes." };
+      }
       const userId = currentUserOrThrow(), device = pickDevice(userId, input.computer as string | undefined);
       const [action, args, summary] = name === "propose_computer_quit_app" ? ["quit_app", { name: input.name }, `Quit ${input.name} on ${device.name}`]
         : name === "propose_computer_power" ? ["power", { action: input.action }, `${String(input.action)[0].toUpperCase()}${String(input.action).slice(1)} ${device.name}`]

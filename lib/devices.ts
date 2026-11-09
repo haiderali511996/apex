@@ -186,7 +186,44 @@ export function saveProgress(deviceId: string, commandId: string, progress: unkn
 export type Job = { id: string; action: string; title: string; computer: string; task: string; status: string; progress: unknown; result: string | null; startedAt: string; updatedAt: string };
 
 /** Claude Code jobs that are running, or finished in the last two minutes, for the live Developer panel. */
+/** How long each kind of command may run before it counts as lost (the computer's own limits plus a margin). */
+const LIMIT_MIN: Record<string, number> = { dev_task: 13, dev_ask: 6, dev_chats: 6, claude_ask: 7 };
+
+/**
+ * Closes commands that went silent past their limit. The computer's answer
+ * can be lost (the server restarting while it reports, a dropped
+ * connection), and the request that was waiting for it may be gone too, so
+ * nothing else would ever close it and the Developer card would show
+ * "working" forever. If Claude Code left a closing note in its progress,
+ * that becomes the result. A late answer still lands (saveResult).
+ */
+export function expireStale(userId: string) {
+  const d = db();
+  const rows = d.prepare("SELECT id, action, status, progress, created_at, updated_at FROM device_commands WHERE user_id = ? AND status IN ('queued', 'sent')").all(userId) as { id: string; action: string; status: string; progress: string | null; created_at: string; updated_at: string }[];
+  for (const r of rows) {
+    const limit = (LIMIT_MIN[r.action] ?? 3) * 60_000;
+    let note = "", stepRunning = false;
+    try {
+      const p = JSON.parse(r.progress ?? "null") as { note?: string; steps?: { status?: string }[] } | null;
+      note = String(p?.note ?? "");
+      stepRunning = !!p?.steps?.some(s => s.status === "running");
+    } catch { /* none */ }
+    // Finished but not reported: desktop apps before 1.0.6 waited for servers
+    // Claude Code had started (npm run dev) to exit. A closing note, nothing
+    // running and two quiet minutes means the work is done.
+    const finishedQuietly = r.status === "sent" && note && !stepRunning && Date.now() - Date.parse(r.updated_at) > 2 * 60_000;
+    if (!finishedQuietly && Date.now() - Date.parse(r.created_at) < limit) continue;
+    const [status, result] = r.status === "queued"
+      ? ["failed", "The computer didn't pick this up in time (it may be offline or the app closed). Nothing was run."]
+      : note
+        ? ["done", note]
+        : ["failed", "No answer from the computer within the time limit. The work may have stopped or finished without reporting back; check the project."];
+    d.prepare("UPDATE device_commands SET status = ?, result = ?, updated_at = ? WHERE id = ? AND status IN ('queued', 'sent')").run(status, result, new Date().toISOString(), r.id);
+  }
+}
+
 export function recentJobs(userId: string): Job[] {
+  expireStale(userId);
   const since = new Date(Date.now() - 2 * 60_000).toISOString();
   const rows = db().prepare(`SELECT c.id, c.action, c.args, c.status, c.progress, c.result, c.created_at, c.updated_at, d.name AS computer
     FROM device_commands c JOIN devices d ON d.id = c.device_id

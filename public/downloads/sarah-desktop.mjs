@@ -232,6 +232,10 @@ async function runClaude(cwd, prompt, tools, act, timeoutMs, onProgress) {
       } else if (e.type === "result") {
         final = typeof e.result === "string" ? e.result : "";
         failed = !!e.is_error;
+        // The answer is in. Servers Claude Code started in the background
+        // (npm run dev…) keep its output open, so waiting for that to close
+        // could take forever: finish now if it hasn't exited in a few seconds.
+        setTimeout(() => settle(0), 5000);
       }
     };
     child.stdout.on("data", d => {
@@ -244,14 +248,23 @@ async function runClaude(cwd, prompt, tools, act, timeoutMs, onProgress) {
       }
     });
     child.stderr.on("data", d => { err += d; });
-    child.on("error", e => { clearTimeout(timer); reject(e); });
-    child.on("close", code => {
+    child.on("error", e => { if (done) return; done = true; clearTimeout(timer); reject(e); });
+    let done = false;
+    const settle = (code) => {
+      if (done) return;
+      done = true;
       clearTimeout(timer);
+      // Stop listening; anything still holding the output open is left running.
+      child.stdout.removeAllListeners("data"); child.stderr.removeAllListeners("data");
+      child.stdout.destroy(); child.stderr.destroy();
       const text = (final ?? "").trim();
       if (code === 0 && text && !failed) return resolve(text.length > 7000 ? `${text.slice(0, 7000)}\n…(cut short)` : text);
       const why = (err || text || plain).trim();
       reject(new Error(/login|log in|authenticate|api key/i.test(why) ? `Claude Code on ${os.hostname()} isn't signed in. Run "claude" in a terminal once and sign in.` : `Claude Code stopped: ${why.slice(0, 600) || `exit code ${code}`}`));
-    });
+    };
+    // "exit" fires when Claude Code itself ends, even if its output is still held open.
+    child.on("exit", code => setTimeout(() => settle(code ?? 0), 300));
+    child.on("close", code => settle(code ?? 0));
     child.stdin.end(prompt);
   });
 }
@@ -526,7 +539,7 @@ async function work() {
           output = String(await action(cmd.args || {}, { progress: progressSender(config.server, headers, cmd.id) }));
         } catch (err) { ok = false; output = err instanceof Error ? err.message : String(err); }
         console.log(`${new Date().toLocaleTimeString()}  ${ok ? "✓" : "✗"} ${cmd.action}: ${output.split("\n")[0].slice(0, 120)}`);
-        await fetch(new URL("/api/devices/result", config.server), { method: "POST", headers, body: JSON.stringify({ id: cmd.id, ok, output }) }).catch(() => {});
+        await sendResult(new URL("/api/devices/result", config.server), headers, { id: cmd.id, ok, output });
       })();
     } catch (err) {
       if (err.fatal) throw err;
@@ -549,4 +562,20 @@ if (direct) try {
 } catch (err) {
   console.error(err instanceof Error ? err.message : err);
   process.exit(1);
+}
+
+/**
+ * Hands a finished command's answer back, retrying for up to 15 minutes: if
+ * the server is restarting at that moment, one failed attempt used to lose
+ * the answer and leave the job showing as running.
+ */
+async function sendResult(url, headers, body) {
+  for (let wait = 2000, until = Date.now() + 15 * 60_000; ; wait = Math.min(wait * 2, 60_000)) {
+    try {
+      const res = await fetch(url, { method: "POST", headers, body: JSON.stringify(body), signal: AbortSignal.timeout(30_000) });
+      if (res.ok || (res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429)) return;
+    } catch { /* offline or restarting */ }
+    if (Date.now() > until) return;
+    await new Promise(r => setTimeout(r, wait));
+  }
 }

@@ -301,7 +301,7 @@ function startLoop() {
             output = String(await action(cmd.args || {}, { progress: progressSender(link.server, headers, cmd.id) }));
           } catch (err) { ok = false; output = err instanceof Error ? err.message : String(err); }
           setState(state.text, `${ok ? "✓" : "✗"} ${String(output).split("\n")[0].slice(0, 60)}`);
-          await fetch(new URL("/api/devices/result", link.server), { method: "POST", headers, body: JSON.stringify({ id: cmd.id, ok, output }) }).catch(() => {});
+          await sendResult(new URL("/api/devices/result", link.server), headers, { id: cmd.id, ok, output });
         })();
       } catch {
         if (id !== loopId) return;
@@ -331,4 +331,20 @@ else {
     setInterval(() => void checkForUpdate(), 6 * 3600_000);
     if (link) { startLoop(); startMemorySync(); } else showLogin();
   });
+}
+
+/**
+ * Hands a finished command's answer back, retrying for up to 15 minutes: if
+ * the server is restarting at that moment, one failed attempt used to lose
+ * the answer and leave the job showing as running.
+ */
+async function sendResult(url, headers, body) {
+  for (let wait = 2000, until = Date.now() + 15 * 60_000; ; wait = Math.min(wait * 2, 60_000)) {
+    try {
+      const res = await fetch(url, { method: "POST", headers, body: JSON.stringify(body), signal: AbortSignal.timeout(30_000) });
+      if (res.ok || (res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429)) return;
+    } catch { /* offline or restarting */ }
+    if (Date.now() > until) return;
+    await new Promise(r => setTimeout(r, wait));
+  }
 }
