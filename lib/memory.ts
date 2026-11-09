@@ -61,7 +61,20 @@ function db() {
     );
     CREATE INDEX IF NOT EXISTS chat_log_user ON chat_log (user_id, created_at);
     CREATE TABLE IF NOT EXISTS memory_migrated (user_id TEXT PRIMARY KEY);
+    CREATE TABLE IF NOT EXISTS work_sessions (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      summary TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS work_sessions_user ON work_sessions (user_id, updated_at);
   `);
+  // Each turn belongs to the task (work session) it was about.
+  if (!(d.prepare("PRAGMA table_info(chat_log)").all() as { name: string }[]).some(c => c.name === "session_id")) {
+    d.exec("ALTER TABLE chat_log ADD COLUMN session_id TEXT");
+  }
   return d;
 }
 
@@ -126,7 +139,7 @@ export function logTurn(userId: string, role: "user" | "assistant", content: str
   const text = content.trim();
   if (!text) return;
   const d = db();
-  d.prepare("INSERT INTO chat_log (id, user_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)").run(randomUUID(), userId, role, text.slice(0, 8000), new Date().toISOString());
+  d.prepare("INSERT INTO chat_log (id, user_id, role, content, created_at, session_id) VALUES (?, ?, ?, ?, ?, ?)").run(randomUUID(), userId, role, text.slice(0, 8000), new Date().toISOString(), currentSession(userId)?.id ?? null);
   d.prepare("DELETE FROM chat_log WHERE user_id = ? AND id NOT IN (SELECT id FROM chat_log WHERE user_id = ? ORDER BY created_at DESC LIMIT ?)").run(userId, userId, KEEP_TURNS);
 }
 
@@ -170,16 +183,85 @@ export function clearConversation(userId: string) {
   db().prepare("DELETE FROM chat_log WHERE user_id = ?").run(userId);
 }
 
+// ---------- Work sessions: one per task ----------
+//
+// Every task the user starts (fix the website, a D-Med literature design, a
+// trading question) gets its own session: a title, a running summary, and
+// the conversation turns that belong to it. Sarah's context is the current
+// session's conversation, so an unrelated new job doesn't drag the last one
+// along; earlier tasks stay listed and can be picked up again. Sessions are
+// decided after each exchange, in the same background pass that learns
+// facts, so they add no wait before Sarah answers.
+
+export type WorkSession = { id: string; title: string; summary: string; createdAt: string; updatedAt: string };
+type SessionRow = { id: string; title: string; summary: string; created_at: string; updated_at: string };
+const toSession = (r: SessionRow): WorkSession => ({ id: r.id, title: r.title, summary: r.summary, createdAt: r.created_at, updatedAt: r.updated_at });
+const KEEP_SESSIONS = 60;
+
+/** The task being worked on now: the most recently active session. */
+export function currentSession(userId: string): WorkSession | null {
+  const r = db().prepare("SELECT id, title, summary, created_at, updated_at FROM work_sessions WHERE user_id = ? ORDER BY updated_at DESC LIMIT 1").get(userId) as SessionRow | undefined;
+  return r ? toSession(r) : null;
+}
+
+export function listSessions(userId: string, limit = 12): WorkSession[] {
+  return (db().prepare("SELECT id, title, summary, created_at, updated_at FROM work_sessions WHERE user_id = ? ORDER BY updated_at DESC LIMIT ?").all(userId, limit) as SessionRow[]).map(toSession);
+}
+
+function startSession(userId: string, title: string, summary: string, turnIds: string[]): WorkSession {
+  const d = db(), now = new Date().toISOString(), id = randomUUID();
+  d.prepare("INSERT INTO work_sessions (id, user_id, title, summary, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)").run(id, userId, title.slice(0, 120), summary.slice(0, 1200), now, now);
+  for (const t of turnIds) d.prepare("UPDATE chat_log SET session_id = ? WHERE id = ? AND user_id = ?").run(id, t, userId);
+  const old = d.prepare("SELECT id FROM work_sessions WHERE user_id = ? ORDER BY updated_at DESC LIMIT -1 OFFSET ?").all(userId, KEEP_SESSIONS) as { id: string }[];
+  for (const o of old) d.prepare("DELETE FROM work_sessions WHERE id = ?").run(o.id);
+  return { id, title, summary, createdAt: now, updatedAt: now };
+}
+
+function touchSession(userId: string, id: string, title: string | undefined, summary: string | undefined, turnIds: string[]) {
+  const d = db(), now = new Date().toISOString();
+  d.prepare("UPDATE work_sessions SET title = COALESCE(?, title), summary = COALESCE(?, summary), updated_at = ? WHERE id = ? AND user_id = ?")
+    .run(title?.trim() ? title.slice(0, 120) : null, summary?.trim() ? summary.slice(0, 1200) : null, now, id, userId);
+  for (const t of turnIds) d.prepare("UPDATE chat_log SET session_id = ? WHERE id = ? AND user_id = ?").run(id, t, userId);
+}
+
+/** The last exchange's turn ids (user and assistant), newest last. */
+function lastExchange(userId: string): string[] {
+  return (db().prepare("SELECT id FROM chat_log WHERE user_id = ? ORDER BY created_at DESC LIMIT 2").all(userId) as { id: string }[]).map(r => r.id);
+}
+
+/**
+ * How many of the latest chat messages belong to the current task, for
+ * trimming the context; at least a few so a reply to a short question
+ * still has what it answers.
+ */
+export function sessionTurnCount(userId: string): number {
+  const cur = currentSession(userId);
+  if (!cur) return 30;
+  const rows = db().prepare("SELECT session_id FROM chat_log WHERE user_id = ? ORDER BY created_at DESC LIMIT 60").all(userId) as { session_id: string | null }[];
+  let n = 0;
+  for (const r of rows) { if (r.session_id !== cur.id) break; n++; }
+  return Math.max(n, 4);
+}
+
+function sessionBrief(userId: string): string {
+  const [cur, ...others] = listSessions(userId, 8);
+  if (!cur) return "";
+  const day = (iso: string) => iso.slice(0, 10);
+  const lines = [`\n\nCURRENT TASK (what this conversation is about now): ${cur.title}${cur.summary ? ` — ${cur.summary}` : ""} (started ${day(cur.createdAt)})`];
+  if (others.length) lines.push(`OTHER RECENT TASKS — separate work; don't mix their details into the current task unless the user refers back to one (then use its summary, or recall for more):\n${others.map(o => `- ${o.title}${o.summary ? `: ${o.summary}` : ""} (last ${day(o.updatedAt)})`).join("\n")}`);
+  return lines.join("\n");
+}
+
 // ---------- The brief Gemini starts every chat with ----------
 
 export async function memoryBrief(userId: string, name: string): Promise<string> {
   const facts = (await listMemories(userId)).slice(0, BRIEF_FACTS);
-  if (!facts.length) return "";
+  if (!facts.length) return sessionBrief(userId);
   const groups = CATEGORIES.map(c => {
     const items = facts.filter(f => f.category === c);
     return items.length ? `${CATEGORY_TITLES[c]}:\n${items.map(f => `- ${f.fact} (${f.updatedAt.slice(0, 10)})`).join("\n")}` : "";
   }).filter(Boolean);
-  return `\n\nYOUR MEMORY — what you already know about ${name || "them"} from earlier conversations (newest first; dates are when last confirmed). Use it without being asked, never ask them for something listed here, follow every rule they gave you, and if they correct something, believe them:\n${groups.join("\n\n")}`;
+  return `\n\nYOUR MEMORY — what you already know about ${name || "them"} from earlier conversations (newest first; dates are when last confirmed). Use it without being asked, never ask them for something listed here, follow every rule they gave you, and if they correct something, believe them:\n${groups.join("\n\n")}${sessionBrief(userId)}`;
 }
 
 // ---------- Learning from each exchange ----------
@@ -190,7 +272,13 @@ Skip small talk, greetings, questions that were simply answered, the weather, an
 If a new fact replaces or corrects an existing one, update that one instead of adding a duplicate. Remove facts the user says are wrong or no longer true.
 Write each fact as one short, self-contained sentence in English, naming things specifically.
 Categories: ${CATEGORIES.join(", ")}.
-Reply with JSON only: {"add":[{"category":"...","fact":"..."}],"update":[{"id":"...","fact":"..."}],"remove":["id"]}. Use empty lists when nothing is worth keeping — that is the usual case.`;
+Reply with JSON only: {"add":[{"category":"...","fact":"..."}],"update":[{"id":"...","fact":"..."}],"remove":["id"],"task":{...}}. Use empty lists when nothing is worth keeping — that is the usual case.
+
+You also keep track of which TASK the conversation is about. You get the current task and other recent ones. Set "task" to one of:
+- {"action":"same","summary":"..."} — the exchange continues the current task, or is small talk / a quick question. Give an updated summary only when something meaningful changed (what the task is, what was decided or done, what is left), in at most 3 sentences; otherwise omit summary.
+- {"action":"new","title":"...","summary":"..."} — the user started work unrelated to the current task (a different project, product, problem or goal). Title: 2–6 words naming it specifically ("D-Med box literature design", "Fix login bug on localhost"). Follow-ups, corrections, "still not working", "make it bigger" are NOT new.
+- {"action":"resume","id":"...","summary":"..."} — the user went back to one of the other recent tasks (use its id).
+With no current task yet, use "new" for anything that is real work, "same" for small talk.`;
 
 /** Runs after each exchange, in the background; a failure only means nothing new was learned. */
 export async function learnFromTurn(userId: string, userText: string, reply: string) {
@@ -199,8 +287,14 @@ export async function learnFromTurn(userId: string, userText: string, reply: str
     const existing = (await listMemories(userId)).slice(0, 150);
     const memory = existing.map(m => `${m.id} [${m.category}] ${m.fact}`).join("\n") || "(empty)";
     const today = new Date().toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
-    const content = await generateGemini(LEARN, [{ role: "user", parts: [{ text: `Today: ${today}\n\nMEMORY:\n${memory}\n\nLATEST EXCHANGE:\nUser: ${userText.slice(0, 4000)}\nAssistant: ${reply.slice(0, 4000)}` }] }], undefined, { json: true });
-    const out = JSON.parse(geminiText(content) || "{}") as { add?: { category?: string; fact?: string }[]; update?: { id?: string; fact?: string }[]; remove?: string[] };
+    const [cur, ...others] = listSessions(userId, 8);
+    const tasks = `CURRENT TASK: ${cur ? `${cur.id} — ${cur.title}: ${cur.summary || "(no summary yet)"}` : "(none yet)"}\nOTHER RECENT TASKS:\n${others.map(o => `${o.id} — ${o.title}: ${o.summary}`).join("\n") || "(none)"}`;
+    const content = await generateGemini(LEARN, [{ role: "user", parts: [{ text: `Today: ${today}\n\nMEMORY:\n${memory}\n\n${tasks}\n\nLATEST EXCHANGE:\nUser: ${userText.slice(0, 4000)}\nAssistant: ${reply.slice(0, 4000)}` }] }], undefined, { json: true });
+    const out = JSON.parse(geminiText(content) || "{}") as { add?: { category?: string; fact?: string }[]; update?: { id?: string; fact?: string }[]; remove?: string[]; task?: { action?: string; id?: string; title?: string; summary?: string } };
+    const task = out.task, turns = lastExchange(userId);
+    if (task?.action === "new" && task.title?.trim()) startSession(userId, task.title.trim(), task.summary?.trim() ?? "", turns);
+    else if (task?.action === "resume" && task.id && others.some(o => o.id === task.id)) touchSession(userId, task.id, undefined, task.summary, turns);
+    else if (cur) touchSession(userId, cur.id, undefined, task?.summary, []);
     const known = new Set(existing.map(m => m.id));
     for (const a of out.add ?? []) {
       const category = (CATEGORIES as readonly string[]).includes(a.category ?? "") ? a.category as Category : "work";

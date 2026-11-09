@@ -187,7 +187,7 @@ export type Job = { id: string; action: string; title: string; computer: string;
 
 /** Claude Code jobs that are running, or finished in the last two minutes, for the live Developer panel. */
 /** How long each kind of command may run before it counts as lost (the computer's own limits plus a margin). */
-const LIMIT_MIN: Record<string, number> = { dev_task: 13, dev_ask: 6, dev_chats: 6, claude_ask: 7 };
+const LIMIT_MIN: Record<string, number> = { dev_task: 33, dev_ask: 6, dev_chats: 6, claude_ask: 7 };
 
 /**
  * Closes commands that went silent past their limit. The computer's answer

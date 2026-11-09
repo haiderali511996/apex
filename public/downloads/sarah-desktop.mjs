@@ -82,6 +82,45 @@ const SKIP = new Set(["Library", "Applications", "Movies", "Music", "Pictures", 
 const MARKERS = [".git", "package.json", "pyproject.toml", "requirements.txt", "Cargo.toml", "go.mod", "pubspec.yaml", "Gemfile", "composer.json", "pom.xml", "build.gradle", "CLAUDE.md"];
 const squash = (s) => String(s).toLowerCase().replace(/[^a-z0-9]/g, "");
 
+/**
+ * The PATH a terminal gets. Apps opened from the Dock or Start menu get a
+ * bare one, so without this Claude Code couldn't find docker, node, npm,
+ * python or brew and couldn't run or check the user's project.
+ */
+let terminalPath = null;
+async function fullPath() {
+  if (terminalPath) return terminalPath;
+  const parts = [];
+  if (PLATFORM !== "win32") {
+    // An interactive login shell reads .zprofile and .zshrc, where nvm, pyenv and friends set PATH.
+    const out = await sh(process.env.SHELL || "/bin/zsh", ["-ilc", 'printf "__PATH__%s__PATH__" "$PATH"'], 15_000).catch(() => "");
+    const m = /__PATH__(.*?)__PATH__/s.exec(out);
+    if (m) parts.push(...m[1].split(":"));
+    parts.push("/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin", path.join(HOME, ".docker", "bin"), "/Applications/Docker.app/Contents/Resources/bin", path.join(HOME, ".local", "bin"));
+  }
+  parts.push(...(process.env.PATH || "").split(PLATFORM === "win32" ? ";" : ":"));
+  terminalPath = [...new Set(parts.filter(Boolean))].join(PLATFORM === "win32" ? ";" : ":");
+  return terminalPath;
+}
+
+/**
+ * Developer tasks continue the same Claude Code conversation per project,
+ * so "it's still broken" builds on what was already tried. A task marked
+ * fresh (new, unrelated work) starts a new one.
+ */
+const SESSIONS = path.join(HOME, ".sarah-desktop-sessions.json");
+const SESSION_HOURS = 12;
+async function loadSessions() { try { return JSON.parse(await readFile(SESSIONS, "utf8")); } catch { return {}; } }
+async function lastSession(dir) {
+  const s = (await loadSessions())[dir];
+  return s && Date.now() - s.at < SESSION_HOURS * 3_600_000 ? s.id : null;
+}
+async function keepSession(dir, id) {
+  const all = await loadSessions();
+  all[dir] = { id, at: Date.now() };
+  await writeFile(SESSIONS, JSON.stringify(all, null, 2), { mode: 0o600 }).catch(() => {});
+}
+
 /** The Claude Code program: on the PATH, a standard install, or the one inside the VS Code / Cursor extension. */
 async function claudeBinary() {
   const exe = PLATFORM === "win32" ? "claude.exe" : "claude";
@@ -199,12 +238,12 @@ function stepLabel(name, input = {}, cwd = "") {
  * — the to-do list and each step, running, done or failed — and passed to
  * onProgress, which the app forwards so the user watches the work happen.
  */
-async function runClaude(cwd, prompt, tools, act, timeoutMs, onProgress) {
+async function runClaude(cwd, prompt, tools, act, timeoutMs, onProgress, opts = {}) {
   const bin = await claudeBinary();
   if (!bin) throw new Error(`Claude Code isn't installed on ${os.hostname()}. Install it from https://claude.com/claude-code, sign in once by running "claude" in a terminal, then ask again.`);
-  const env = { ...process.env };
+  const env = { ...process.env, PATH: await fullPath() };
   delete env.ANTHROPIC_API_KEY;
-  const args = ["-p", "--output-format", "stream-json", "--verbose", "--allowedTools", tools.join(","), ...(act ? ["--permission-mode", "acceptEdits"] : [])];
+  const args = ["-p", "--output-format", "stream-json", "--verbose", "--allowedTools", tools.join(","), ...(act ? ["--permission-mode", "acceptEdits"] : []), ...(opts.resume ? ["--resume", opts.resume] : [])];
   const progress = { steps: [], todos: [], note: "" };
   const byId = new Map();
   const report = () => { try { onProgress?.(progress); } catch { /* progress is best effort */ } };
@@ -230,6 +269,7 @@ async function runClaude(cwd, prompt, tools, act, timeoutMs, onProgress) {
         }
         report();
       } else if (e.type === "result") {
+        if (e.session_id) opts.onSession?.(e.session_id);
         final = typeof e.result === "string" ? e.result : "";
         failed = !!e.is_error;
         // The answer is in. Servers Claude Code started in the background
@@ -272,6 +312,14 @@ async function runClaude(cwd, prompt, tools, act, timeoutMs, onProgress) {
 const DEV_BRIEF = "You are the Developer agent inside the user's voice assistant, which relays your answer, often aloud. Answer directly and concisely, naming files as path:line.";
 const ASK_BRIEF = `${DEV_BRIEF} You can read and search this project but not change it; if asked to change something, explain exactly what you would change and where. Read CLAUDE.md or README first when it helps.`;
 const CHATS_BRIEF = `${DEV_BRIEF} This folder is Claude Code's chat history: each subfolder is a project (its path with / turned into -), each .jsonl file one chat, each line a JSON event with a timestamp ("type":"user" lines are the user's messages). Files can be large: Grep first, then Read only what's relevant. Say which project and date each finding is from. Never repeat keys, tokens or passwords.`;
+const VERIFY_BRIEF = `How to work, so the fix is real:
+1. Find out how this project runs before changing anything: read CLAUDE.md / README, package.json scripts, docker-compose files and .env.example. If it runs in Docker, check it with docker compose ps and docker compose logs --tail=200 <service>; otherwise find the dev servers and their ports (lsof -iTCP -sTCP:LISTEN -n -P).
+2. Reproduce the problem first on the user's running local setup (curl the localhost URL or API, read the container or server logs, run the failing test or build), so you know the real error, not a guess.
+3. Fix the root cause, not the symptom. Keep the change as small as it can be.
+4. Apply it where it runs: restart or rebuild only the affected service (docker compose up -d --build <service>, or restart its dev server); run database migrations the project defines if the fix needs them. Never run docker compose down -v, delete volumes, drop or reset databases, or kill processes you didn't start.
+5. Verify on localhost the same way you reproduced it, and run the project's lint, type check and tests that cover the change. If it still fails, keep going: read the new error and fix again.
+6. Report honestly: say "verified" only for what you actually checked and saw working, with the command and its result; if you couldn't verify or finish, say exactly what is left and why.`;
+
 const TASK_BRIEF = `${DEV_BRIEF} The user approved this exact task; do it now in this project with the terminal and file tools. Do only what it asks. Don't push, force-push, delete branches, deploy, or remove files beyond the task unless it says so. If something could lose work (uncommitted changes in the way, conflicts, a failing migration), stop and report instead of forcing it. Git rule: before any git push, first run git pull on that branch (fetch and integrate the remote changes the way the project does, merge or rebase) and make sure it still builds; if the pull brings conflicts, stop and report them instead of pushing or forcing. Finish with a short report: first sentence says what happened, then the commands you ran.`;
 
 export const ACTIONS = {
@@ -458,9 +506,22 @@ if (-not $b) { "Battery: none (desktop computer)" } else {
   },
 
   // Sent only after the user approved this exact task in the app.
-  async dev_task({ project, task }, ctx = {}) {
+  async dev_task({ project, task, fresh }, ctx = {}) {
     const p = await findProject(project);
-    return `${p.name} (${tilde(p.path)}):\n${await runClaude(p.path, `${TASK_BRIEF} For anything with more than two steps, keep a to-do list with TodoWrite so the user can follow along.\n\nTask: ${task}`, ["Bash", "Read", "Edit", "Write", "Glob", "Grep", "WebFetch", "WebSearch", "TodoWrite"], true, 10 * 60_000, ctx.progress)}`;
+    const tools = ["Bash", "Read", "Edit", "Write", "Glob", "Grep", "WebFetch", "WebSearch", "TodoWrite"];
+    const prompt = `${TASK_BRIEF} For anything with more than two steps, keep a to-do list with TodoWrite so the user can follow along.\n\n${VERIFY_BRIEF}\n\nTask: ${task}`;
+    const onSession = (id) => { void keepSession(p.path, id); };
+    // A follow-up continues the last conversation in this project, so it knows what was tried.
+    const resume = fresh ? null : await lastSession(p.path);
+    let answer;
+    try {
+      answer = await runClaude(p.path, resume ? `Follow-up from the user on the same work.\n\n${prompt}` : prompt, tools, true, 30 * 60_000, ctx.progress, { resume, onSession });
+    } catch (err) {
+      // The old conversation is gone (cleared, or another computer): start a new one.
+      if (!resume || !/no conversation|session|not found/i.test(String(err?.message))) throw err;
+      answer = await runClaude(p.path, prompt, tools, true, 30 * 60_000, ctx.progress, { onSession });
+    }
+    return `${p.name} (${tilde(p.path)}):\n${answer}`;
   },
 };
 

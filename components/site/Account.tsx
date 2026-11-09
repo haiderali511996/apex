@@ -301,12 +301,21 @@ function AgentEngines() {
 type MemoryItem = { id: string; category: string; fact: string; source: "auto" | "user"; updatedAt: string };
 const MEMORY_GROUPS: [string, string][] = [["preference", "Your rules and preferences"], ["profile", "About you"], ["project", "Projects"], ["connection", "Connected accounts and computers"], ["asset", "Designs, logos and files"], ["decision", "Decisions"], ["person", "People and companies"], ["task", "Open tasks"], ["work", "Work done together"]];
 
-/** What the assistant remembers between conversations, which the account can read, add to and prune. */
+type WorkSession = { id: string; title: string; summary: string; updatedAt: string };
+
+/**
+ * What the assistant remembers between conversations, summarised so it reads
+ * at a glance: recent tasks, then one line per kind of memory that opens to
+ * the facts in it. A search finds any fact; each can be forgotten.
+ */
 function MemoryBank() {
   const [items, setItems] = useState<MemoryItem[] | null>(null);
+  const [sessions, setSessions] = useState<WorkSession[]>([]);
+  const [allTasks, setAllTasks] = useState(false);
   const [draft, setDraft] = useState("");
+  const [find, setFind] = useState("");
   const [note, setNote] = useState("");
-  useEffect(() => { void fetch("/api/memory").then(r => r.ok ? r.json() : null).then(b => b && setItems(b.memories)); }, []);
+  useEffect(() => { void fetch("/api/memory").then(r => r.ok ? r.json() : null).then(b => { if (b) { setItems(b.memories); setSessions(b.sessions ?? []); } }); }, []);
   const call = async (init: RequestInit, query = "") => {
     const res = await fetch(`/api/memory${query}`, init).catch(() => null);
     const body = res ? await res.json().catch(() => ({})) : {};
@@ -323,31 +332,58 @@ function MemoryBank() {
     await fetch("/api/agent/history", { method: "DELETE" });
     setNote("Conversation cleared.");
   };
+  const q = find.trim().toLowerCase();
+  const shown = (items ?? []).filter(i => !q || i.fact.toLowerCase().includes(q));
+  const tasks = allTasks ? sessions : sessions.slice(0, 4);
+  const muted = { color: "var(--muted)", fontSize: 12 } as const;
   return (
     <section className="card" style={{ padding: 24 }}>
-      <h3 style={{ fontSize: 18 }}>Memory</h3>
-      <p style={{ marginBottom: 14 }}>Your assistant notes what matters after each conversation (projects, connections, decisions, designs, your rules) and starts every chat knowing it. Your conversation is saved too, so it continues on any device. The desktop app keeps a copy on your computer in <b>Documents/UNC Assistant/memory.md</b>. Passwords and keys are never kept.</p>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
+        <h3 style={{ fontSize: 18 }}>Memory</h3>
+        {items && <span style={muted}>{items.length} facts · {sessions.length} tasks</span>}
+      </div>
+      <p style={{ marginBottom: 14, fontSize: 14 }}>Notes what matters after each conversation and starts every chat knowing it. Each task gets its own session, so unrelated work doesn&apos;t get mixed up. Copy on your computer: <b>Documents/UNC Assistant/memory.md</b>. Passwords and keys are never kept.</p>
       <form onSubmit={add} style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
-        <input value={draft} onChange={e => setDraft(e.target.value)} placeholder="Add something to always remember, e.g. Always use my UNC logo unchanged" style={{ flex: "1 1 240px", minWidth: 0 }} />
+        <input value={draft} onChange={e => setDraft(e.target.value)} placeholder="Always remember… e.g. Always use my UNC logo unchanged" style={{ flex: "1 1 240px", minWidth: 0 }} />
         <button className="btn btn-primary btn-small" type="submit" disabled={!draft.trim()}>Remember</button>
       </form>
-      {items === null ? <p style={{ color: "var(--muted)" }}>Loading…</p> : !items.length ? <p style={{ color: "var(--muted)" }}>Nothing yet. Talk to your assistant and it will start remembering.</p> :
-        <div style={{ display: "grid", gap: 16 }}>
-          {MEMORY_GROUPS.map(([key, title]) => {
-            const group = items.filter(i => i.category === key);
+
+      {sessions.length > 0 && <div style={{ marginBottom: 14 }}>
+        <b style={{ color: "var(--text)", fontSize: 14 }}>Tasks</b>
+        <div style={{ display: "grid", gap: 4, marginTop: 6 }}>
+          {tasks.map((t, i) => <div key={t.id} title={t.summary} style={{ display: "flex", gap: 8, alignItems: "baseline", minWidth: 0 }}>
+            <span style={{ color: i === 0 ? "var(--accent)" : "var(--muted)", fontSize: 12 }}>{i === 0 ? "●" : "○"}</span>
+            <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}><b style={{ color: "var(--text)", fontWeight: 500 }}>{t.title}</b>{t.summary && <span style={muted}> — {t.summary}</span>}</span>
+            <span style={{ ...muted, marginLeft: "auto", flexShrink: 0 }}>{t.updatedAt.slice(5, 10)}</span>
+          </div>)}
+        </div>
+        {sessions.length > 4 && <button type="button" className="btn btn-ghost btn-small" style={{ marginTop: 6 }} onClick={() => setAllTasks(v => !v)}>{allTasks ? "Show fewer" : `Show all ${sessions.length}`}</button>}
+      </div>}
+
+      {items === null ? <p style={{ color: "var(--muted)" }}>Loading…</p> : !items.length ? <p style={{ color: "var(--muted)" }}>Nothing yet. Talk to your assistant and it will start remembering.</p> : <>
+        <input value={find} onChange={e => setFind(e.target.value)} placeholder="Search memory" aria-label="Search memory" style={{ width: "100%", marginBottom: 8 }} />
+        <div style={{ border: "1px solid var(--line)", borderRadius: 10 }}>
+          {MEMORY_GROUPS.map(([key, title], gi) => {
+            const group = shown.filter(i => i.category === key);
             if (!group.length) return null;
-            return <div key={key}>
-              <b style={{ color: "var(--text)", fontSize: 14 }}>{title} <span style={{ color: "var(--muted)", fontWeight: 400 }}>({group.length})</span></b>
-              <div style={{ display: "grid", gap: 6, marginTop: 8 }}>
-                {group.map(m => <div key={m.id} style={{ display: "flex", gap: 10, alignItems: "flex-start", justifyContent: "space-between", border: "1px solid var(--line)", borderRadius: 10, padding: "8px 12px" }}>
-                  <span style={{ minWidth: 0, overflowWrap: "anywhere" }}>{m.fact} <span style={{ color: "var(--muted)", fontSize: 12 }}>· {m.updatedAt.slice(0, 10)}{m.source === "user" ? " · added by you" : ""}</span></span>
-                  <button type="button" className="btn btn-ghost btn-small" aria-label={`Forget: ${m.fact}`} onClick={() => call({ method: "DELETE" }, `?id=${encodeURIComponent(m.id)}`)}>Forget</button>
-                </div>)}
-              </div>
-            </div>;
+            return <details key={key} open={!!q} style={{ borderTop: gi ? "1px solid var(--line)" : undefined }}>
+              <summary style={{ cursor: "pointer", padding: "9px 12px", display: "flex", gap: 8, alignItems: "baseline", minWidth: 0 }}>
+                <b style={{ color: "var(--text)", fontSize: 14, flexShrink: 0 }}>{title}</b>
+                <span style={{ ...muted, flexShrink: 0 }}>{group.length}</span>
+                <span style={{ ...muted, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{group[0].fact}</span>
+              </summary>
+              <ul style={{ listStyle: "none", margin: 0, padding: "0 12px 8px", display: "grid", gap: 2, maxHeight: 260, overflowY: "auto" }}>
+                {group.map(m => <li key={m.id} style={{ display: "flex", gap: 8, alignItems: "baseline", fontSize: 14 }}>
+                  <span style={{ minWidth: 0, overflowWrap: "anywhere", flex: 1 }}>{m.fact} <span style={muted}>{m.updatedAt.slice(5, 10)}{m.source === "user" ? " · yours" : ""}</span></span>
+                  <button type="button" className="btn btn-ghost btn-small" style={{ padding: "0 8px", flexShrink: 0 }} title="Forget this" aria-label={`Forget: ${m.fact}`} onClick={() => call({ method: "DELETE" }, `?id=${encodeURIComponent(m.id)}`)}>×</button>
+                </li>)}
+              </ul>
+            </details>;
           })}
-        </div>}
-      <button type="button" className="btn btn-ghost btn-small" style={{ marginTop: 16 }} onClick={clearChat}>Clear saved conversation</button>
+          {q && !shown.length && <p style={{ ...muted, padding: "9px 12px", margin: 0 }}>Nothing matches.</p>}
+        </div>
+      </>}
+      <button type="button" className="btn btn-ghost btn-small" style={{ marginTop: 14 }} onClick={clearChat}>Clear saved conversation</button>
       {note && <p className={note === "Conversation cleared." ? "form-ok" : "form-error"} style={{ marginTop: 8 }}>{note}</p>}
     </section>
   );

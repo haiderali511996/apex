@@ -10,7 +10,7 @@ import type { ClientAction, PendingAction } from "@/lib/agent/types";
 import { requireUser } from "@/lib/auth";
 import type { Persona } from "@/lib/persona";
 import { enterUser } from "@/lib/credentials";
-import { learnFromTurn, logTurn, memoryBrief } from "@/lib/memory";
+import { learnFromTurn, logTurn, memoryBrief, sessionTurnCount } from "@/lib/memory";
 import { enginesBrief } from "@/lib/agentEngines";
 import { emailBrief } from "@/lib/agent/connectors/mailbox";
 import { devBrief } from "@/lib/devContext";
@@ -110,7 +110,7 @@ Trading: the Trading agent (analyze_market, trading_status, set_trading, close_t
 Photos: when the user shows you a photo or screenshot (attached to their message, with its photo_ids), look at it yourself and say briefly what you see. To get something done about it, hand it on with photo_ids: code, app, website or bug problems go to the Developer (propose_developer_task, with the task written out and the photo describing the issue), anything else to the fitting specialist (ask_specialist, with a one-line description of the photo in context). To see something they want to show you through the camera (\"look at this error\", \"take a picture of my screen and send it to the developer\"), call show_photo (camera \"back\" for a screen, paper or object), not design_picture; design_picture is only for making or editing pictures. When they want a design made from or like photos they showed (their product, box, an old design), call design_picture with those photo_ids and an instruction that repeats every exact name, number, dose and line of text they gave, word for word; never paraphrase their text or invent details. Pictures on their Google Drive: search_drive (kind \"image\", empty query for the newest) and drive_photos (file ids, or \"latest:N\") open them so you see them; then hand them on the same way.
 Pictures: design_picture makes them, and each is saved. To post one, use the propose_* post tools with design_id "latest" (or an id from list_designs); post designs automatically carry their uploaded brand logo (Account page → Your brand logo), so never ask the image model to draw a logo.
 To act on their computer (open apps or websites, switch Chrome profiles, list what's open, volume, music, quitting apps, restarting) use the computer_* tools; they reach the computer they linked with the desktop app. If none is linked or it's offline, tell them to link it on the Account page.
-Developer: their developer is Claude Code, running on their linked computer through the desktop app — never ask for a developer's name or contact details. "Line up / ask / tell the developer" means these tools: list_projects (their code projects), ask_developer (questions about a project's code, read-only, answers at once), propose_developer_task (changes, git, tests, fixes — runs after they approve), search_claude_chats (what was done in past Claude Code chats). To put the Design agent's pictures into a project (a blog post, a web page), make them with design_picture first, then call propose_developer_task with design_ids (e.g. ["latest:3"]) and the task written out (topic, where it goes); the Developer downloads them into the project. If the computer is offline or Claude Code isn't installed there, say exactly that.
+Developer: their developer is Claude Code, running on their linked computer through the desktop app — never ask for a developer's name or contact details. "Line up / ask / tell the developer" means these tools: list_projects (their code projects), ask_developer (questions about a project's code, read-only, answers at once), propose_developer_task (changes, git, tests, fixes — runs after they approve), search_claude_chats (what was done in past Claude Code chats). To put the Design agent's pictures into a project (a blog post, a web page), make them with design_picture first, then call propose_developer_task with design_ids (e.g. ["latest:3"]) and the task written out (topic, where it goes); the Developer downloads them into the project. If the computer is offline or Claude Code isn't installed there, say exactly that. Developer tasks: write the task out fully, with the user's own words about the problem quoted, and set fresh true when it is new work unrelated to the Developer's previous task (the CURRENT TASK in your memory changed), false for a follow-up so it continues with what it already tried.
 Memory: you remember earlier conversations — your memory is below, and the recent conversation is included. Notes are taken automatically; use remember for anything they explicitly ask you to keep, and recall to search it.
 
 ${style}`;
@@ -186,7 +186,9 @@ export async function POST(req: NextRequest) {
       const local = isOwner && SERVER_IS_OWNERS_MAC;
       const said = String(messages.at(-1)?.content ?? "");
       // The last 30 messages are plenty of context; older ones live on in memory.
-      const recent = await withPhotos(user.id, messages.slice(-30));
+      // Only the current task's conversation (plus the newest message): an
+      // unrelated earlier job stays out of the way, listed in the memory brief.
+      const recent = await withPhotos(user.id, messages.slice(-Math.min(30, sessionTurnCount(user.id) + 1)));
       const brief = await memoryBrief(user.id, persona.userName).catch(() => "");
       const result = await runViaGemini(recent, (local ? ownerPrompt(persona) : customerPrompt(persona)) + enginesBrief(user.id) + emailBrief() + devBrief(user.id) + brief + whereAndWhen(context), local ? {} : { exclude: LOCAL_TOOL });
       // One line per turn in the dev server log, for tuning the prompt.

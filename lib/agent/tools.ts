@@ -350,7 +350,8 @@ export const toolDefinitions: Anthropic.Tool[] = [
       type: "object",
       properties: {
         project: { type: "string", description: "Project name (as spoken is fine), \"project/subfolder\" (e.g. \"unc/web-next\"), or a folder path. Omit to use the current project." },
-        task: { type: "string", description: "Exactly what to do, written out in full, e.g. \"Run git pull origin main and report what changed.\" or \"Write a new blog post about KYC and use the attached images in it.\"" },
+        task: { type: "string", description: "Exactly what to do, written out in full for a developer who hasn't heard the conversation. For a bug: the user's own words about it (quoted), what they see vs what should happen, where (page, URL, localhost port, API, container), any error text, and that it must be fixed and checked on their local setup (it may run in Docker) before anything is pushed. E.g. \"Run git pull origin main and report what changed.\"" },
+        fresh: { type: "boolean", description: "True when this is new work unrelated to the Developer's previous task in this project, so it starts a clean session. Leave false for a follow-up on the same work (\"still not fixed\", \"now also…\"), so it continues with what it already tried." },
         design_ids: { type: "array", items: { type: "string" }, description: "Pictures the Design agent made, to use in the work (a blog post, a page, the app): ids from list_designs, or \"latest\", \"latest:3\" for the newest three. The Developer downloads them into the project." },
         photo_ids: { type: "array", items: { type: "string" }, description: "Photos or screenshots the user showed you (their ids from the conversation, or \"latest\"), e.g. of a bug, an error on screen or a layout to copy. The Developer downloads them and looks at them before working." },
       },
@@ -953,7 +954,7 @@ async function runTool(name: string, input: Record<string, unknown>): Promise<To
         const userId = currentUserOrThrow(), device = devComputer(userId);
         const project = await projectOnComputer(input.project as string | undefined);
         setCurrentProject(userId, project);
-        const pending = await createPendingAction({ platform: "computer", kind: "device_command", summary: `Claude Code on ${device.name}, in ${project}: ${input.task}`, payload: { userId, deviceId: device.id, action: "dev_task", args: { project, task: input.task } } });
+        const pending = await createPendingAction({ platform: "computer", kind: "device_command", summary: `Claude Code on ${device.name}, in ${project}: ${input.task}`, payload: { userId, deviceId: device.id, action: "dev_task", args: { project, task: input.task, fresh: input.fresh === true } } });
         return { text: `Task queued for approval (id ${pending.id}). Nothing has run yet; Claude Code on ${device.name} starts once it's approved.`, pendingAction: pending };
       }
       const project = await resolveProject(input.project as string);

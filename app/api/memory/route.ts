@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
 import { enterUser } from "@/lib/credentials";
-import { addMemory, CATEGORIES, deleteMemory, listMemories, type Category } from "@/lib/memory";
+import { addMemory, CATEGORIES, deleteMemory, listMemories, listSessions, type Category } from "@/lib/memory";
 
 export const runtime = "nodejs";
 
@@ -10,7 +10,7 @@ export async function GET() {
   const guard = await requireUser();
   if ("response" in guard) return guard.response;
   enterUser(guard.user.id, guard.user.role === "owner");
-  return NextResponse.json({ memories: await listMemories(guard.user.id) });
+  return NextResponse.json({ memories: await listMemories(guard.user.id), sessions: listSessions(guard.user.id, 20) });
 }
 
 export async function POST(req: NextRequest) {
