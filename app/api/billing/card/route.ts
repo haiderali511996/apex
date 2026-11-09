@@ -1,3 +1,4 @@
+import { publicOrigin } from "@/lib/agent/googleOAuth";
 import { NextRequest, NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
 import { findPlan, PERIOD_DAYS } from "@/lib/plans";
@@ -18,7 +19,7 @@ export async function POST(req: NextRequest) {
   const { plan: planId } = (await req.json().catch(() => ({}))) as { plan?: string };
   const plan = findPlan(planId);
   if (!plan) return NextResponse.json({ error: "Choose a plan." }, { status: 400 });
-  const origin = req.nextUrl.origin;
+  const origin = publicOrigin(req);
   try {
     const session = await stripe<{ url: string }>("POST", "/checkout/sessions", {
       mode: "payment",

@@ -1,3 +1,4 @@
+import { publicOrigin } from "@/lib/agent/googleOAuth";
 import { NextRequest, NextResponse } from "next/server";
 import { getSubscription, requireUser } from "@/lib/auth";
 import { BRAND } from "@/lib/persona";
@@ -27,7 +28,7 @@ export async function POST(req: NextRequest) {
   if ("response" in guard) return guard.response;
   if (getSubscription(guard.user).status !== "pending") return NextResponse.json({ error: "Your trial or plan is already active." }, { status: 400 });
   if (!cardPaymentsEnabled()) return NextResponse.json({ error: "Card payments aren't switched on yet." }, { status: 503 });
-  const origin = req.nextUrl.origin;
+  const origin = publicOrigin(req);
   try {
     const session = await stripe<{ url: string }>("POST", "/checkout/sessions", {
       mode: "payment",

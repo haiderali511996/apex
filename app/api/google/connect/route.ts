@@ -1,7 +1,7 @@
 import { requireUser } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
 import { isLocalRequest, setEnvValues } from "@/lib/envFile";
-import { GOOGLE_SCOPES, oauthClient } from "@/lib/agent/googleOAuth";
+import { GOOGLE_SCOPES, oauthClient, publicOrigin } from "@/lib/agent/googleOAuth";
 import { enterUser, cred, saveCredentials } from "@/lib/credentials";
 
 export const runtime = "nodejs";
@@ -31,9 +31,9 @@ export async function GET(req: NextRequest) {
   enterUser(guard.user.id, guard.user.role === "owner");
   const local = guard.user.role === "owner" && isLocalRequest(req.headers.get("host"));
   if (!cred("GOOGLE_CLIENT_ID") || !cred("GOOGLE_CLIENT_SECRET")) {
-    return NextResponse.redirect(new URL(`${local ? "/connect" : "/connections"}?google=missing-client`, req.nextUrl.origin));
+    return NextResponse.redirect(new URL(`${local ? "/connect" : "/connections"}?google=missing-client`, publicOrigin(req)));
   }
-  const url = oauthClient(req.nextUrl.origin).generateAuthUrl({
+  const url = oauthClient(publicOrigin(req)).generateAuthUrl({
     access_type: "offline",
     // Always ask, so Google always returns a refresh token.
     prompt: "consent",
