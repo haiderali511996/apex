@@ -34,6 +34,13 @@ export default function ConnectGoogle() {
     void load();
   }, []);
 
+  const signOut = async () => {
+    if (!confirm("Sign out of Google? Gmail, Calendar and Drive stop until you connect again.")) return;
+    const res = await fetch("/api/credentials?group=google", { method: "DELETE" }).catch(() => null);
+    setBanner(res?.ok ? { ok: true, text: "Signed out of Google. Press Connect Google to sign in again." } : { ok: false, text: "Couldn't sign out. Try again." });
+    void load();
+  };
+
   const redirect = status?.redirect ?? `${origin}/api/google/callback`;
   const save = async () => {
     setSaving(true);
@@ -79,6 +86,12 @@ export default function ConnectGoogle() {
             {row("Calendar", status?.calendar, (v) => `${v} calendar${v === 1 ? "" : "s"} visible`)}
             {row("Drive", status?.drive, () => "Files visible")}
           </ul>
+          {status?.connected && (
+            <p style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+              <a className="sarah-btn is-primary" href="/api/google/connect" title="Sign in again: fixes an expired connection and grants new permissions">Reconnect Google</a>
+              <button type="button" className="sarah-btn" onClick={signOut}>Sign out</button>
+            </p>
+          )}
 
           <header className="sarah-panel-head"><span className="sarah-label">One-time setup in Google Cloud</span></header>
           <ol className="sarah-connect-steps">

@@ -23,7 +23,8 @@ export async function GET(req: NextRequest) {
   try {
     const { tokens } = await oauthClient(req.nextUrl.origin).getToken(code);
     if (!tokens.refresh_token) return back("error", "Google didn't return a refresh token. Remove Sarah's access at myaccount.google.com/permissions and connect again.");
-    if (local) await setEnvValues({ GOOGLE_REFRESH_TOKEN: tokens.refresh_token });
+    // A local sign-in lives in .env.local, so drop any earlier sign-out on the account.
+    if (local) { await setEnvValues({ GOOGLE_REFRESH_TOKEN: tokens.refresh_token }); saveCredentials(guard.user.id, { GOOGLE_REFRESH_TOKEN: "" }); }
     else saveCredentials(guard.user.id, { GOOGLE_REFRESH_TOKEN: tokens.refresh_token });
     return back("connected");
   } catch (err) {

@@ -380,7 +380,9 @@ export function useApexVoice(options: {
           const handler = clientActionRef.current;
           let outcome: ClientActionOutcome = null;
           try {
-            outcome = handler ? await handler(action) : "Pictures and the camera work on the deck — open the home screen and ask me there.";
+            // Pictures already saved (from Drive): shown here and sent on, on any screen.
+            if (action.type === "show_saved_photos") outcome = { followUp: { text: action.request, photos: action.photos.map(p => ({ id: p.id, src: p.url })) } };
+            else outcome = handler ? await handler(action) : "Pictures and the camera work on the deck — open the home screen and ask me there.";
           } catch (err) {
             outcome = err instanceof Error ? err.message : "That didn't work.";
           }

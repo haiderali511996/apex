@@ -26,7 +26,7 @@ function agentFor(tool: string, input: Record<string, unknown>): Agent | null {
   }
   if (/^(get_inbox|search_email|read_email|propose_email)$/.test(tool)) return A("email", "Email", SLATE);
   if (/calendar/.test(tool)) return A("calendar", "Calendar", SLATE);
-  if (tool === "search_drive") return A("drive", "Drive", SLATE);
+  if (tool === "search_drive" || tool === "drive_photos") return A("drive", "Drive", SLATE);
   if (/crm/.test(tool)) return A("crm", "CRM", SLATE);
   if (/^(get_revenue|get_paypal_report|get_bank_report|get_open_invoices)$/.test(tool)) return A("finance", "Finance", CYAN);
   if (/^(get_seo_report|get_traffic|get_youtube_report)$/.test(tool)) return A("analytics", "Analytics", SLATE);
@@ -53,7 +53,8 @@ function describe(tool: string, i: Record<string, unknown>): string {
     case "propose_email": return `Drafting an email to ${q(i.to, 50)} for your approval`;
     case "get_calendar": return "Reading the calendar";
     case "propose_calendar_event": return `Drafting "${q(i.summary, 50)}" for your approval`;
-    case "search_drive": return `Searching Drive for "${q(i.query, 50)}"`;
+    case "search_drive": return i.query ? `Searching Drive for "${q(i.query, 50)}"` : "Listing the newest Drive files";
+    case "drive_photos": return "Opening pictures from Drive";
     case "get_crm_pipeline": return "Reading the pipeline";
     case "add_crm_lead": return `Adding ${q(i.name, 40)}`;
     case "update_crm_stage": return `Moving ${q(i.name, 40)} to ${q(i.stage, 30)}`;

@@ -11,14 +11,28 @@ const DEFAULT_MODEL = "gemini-3.1-flash-image";
 
 export type ImageResult = { image: string; note: string };
 
-export async function generateImage(instruction: string, photo?: { mimeType: string; data: string }): Promise<ImageResult> {
+type Inline = { mimeType: string; data: string };
+
+/** How the model is told to treat the user's reference photos. */
+const REFERENCE_RULES = `The attached image(s) are the user's own reference photos: their real product, packaging, earlier design or the style they want. Treat them as the source of truth.
+- Reproduce the product, packaging, brand name, logo, colours and layout exactly as they appear in the photos; never invent a different product or brand.
+- Every word, name, number and dose in the instruction below must appear exactly as written, spelled the same; add no claims, ingredients or numbers that aren't given.
+- Where the instruction and the photos differ, the instruction wins.
+- Keep all text sharp, straight and readable.`;
+
+export async function generateImage(instruction: string, photo?: Inline, references: Inline[] = []): Promise<ImageResult> {
   const key = cred("GEMINI_API_KEY")?.trim();
   if (!key) throw new GeminiError("Add GEMINI_API_KEY to .env.local to make pictures.", 503);
   const model = process.env.IMEX_IMAGE_MODEL?.trim() || DEFAULT_MODEL;
 
   const parts: unknown[] = [];
   if (photo) parts.push({ inlineData: photo });
-  parts.push({ text: photo ? `Edit this photo: ${instruction}. Keep the person recognizable unless asked otherwise.` : instruction });
+  for (const r of references) parts.push({ inlineData: r });
+  parts.push({
+    text: photo ? `Edit this photo: ${instruction}. Keep the person recognizable unless asked otherwise.`
+      : references.length ? `${REFERENCE_RULES}\n\nInstruction: ${instruction}`
+      : instruction,
+  });
 
   const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
     method: "POST",

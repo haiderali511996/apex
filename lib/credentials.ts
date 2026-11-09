@@ -164,6 +164,13 @@ export function loadCredentials(userId: string): Record<string, string> {
   return out;
 }
 
+/**
+ * Stored in place of a sign-in token when the user disconnects it, so the
+ * owner's account stops using the server's .env token too. A new sign-in
+ * replaces it.
+ */
+export const SIGNED_OUT = "__signed_out__";
+
 /** Saves the given keys; an empty string removes one. */
 export function saveCredentials(userId: string, values: Record<string, string>) {
   const db = table(), now = new Date().toISOString();
@@ -215,6 +222,8 @@ export function cred(key: string): string | undefined {
   const ctx = context.getStore();
   if (!ctx) return undefined;
   const own = ctx.values[key];
+  // Signed out on purpose: no falling back to the server's .env either.
+  if (own === SIGNED_OUT) return undefined;
   if (own) return own;
   return ctx.owner ? process.env[key] : undefined;
 }

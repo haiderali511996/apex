@@ -1,7 +1,7 @@
 import { requireUser } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
 import { google } from "googleapis";
-import { auth, isConfigured } from "@/lib/agent/connectors/google";
+import { auth, explainGoogleError, isConfigured } from "@/lib/agent/connectors/google";
 import { redirectUri } from "@/lib/agent/googleOAuth";
 import { enterUser, cred } from "@/lib/credentials";
 
@@ -18,7 +18,7 @@ export async function GET(req: NextRequest) {
   const redirect = redirectUri(req.nextUrl.origin);
   if (!isConfigured()) return NextResponse.json({ connected: false, hasClient, redirect });
   const client = auth();
-  const check = async <T,>(fn: () => Promise<T>) => fn().then((value) => ({ ok: true as const, value }), (err: unknown) => ({ ok: false as const, error: err instanceof Error ? err.message : String(err) }));
+  const check = async <T,>(fn: () => Promise<T>) => fn().then((value) => ({ ok: true as const, value }), (err: unknown) => ({ ok: false as const, error: explainGoogleError(err) }));
   const [gmail, calendar, drive] = await Promise.all([
     check(async () => (await google.gmail({ version: "v1", auth: client }).users.getProfile({ userId: "me" })).data.emailAddress ?? ""),
     check(async () => (await google.calendar({ version: "v3", auth: client }).calendarList.list({ maxResults: 50 })).data.items?.length ?? 0),

@@ -11,7 +11,7 @@ import { askAboutChats, askDeveloper, listProjects, nameProject, resolveProject 
 import { claudeComputer, isOnline, listDevices, pickDevice, runOnDevice } from "@/lib/devices";
 import { currentUserId } from "@/lib/credentials";
 import { findDesign, listDesigns } from "@/lib/designs";
-import { pickPhotos } from "@/lib/photos";
+import { pickPhotos, savePhoto } from "@/lib/photos";
 import { analyze } from "@/lib/trading/analyst";
 import { closeTrades, describeAnalysis, getSettings, openFromAnalysis, scan, statusText, updateSettings, type Mode } from "@/lib/trading/engine";
 import type { BrokerId } from "@/lib/trading/brokers";
@@ -202,14 +202,27 @@ export const toolDefinitions: Anthropic.Tool[] = [
   },
   {
     name: "search_drive",
-    description: "Search the user's Google Drive for files by name.",
+    description: "Find files in the user's Google Drive, newest first: by name or content, or with an empty query the latest files. kind \"image\" keeps only pictures (\"the photos I just put on Drive\"). Each result has its file id for drive_photos.",
     input_schema: {
       type: "object",
       properties: {
-        query: { type: "string", description: "Text to match in the file name." },
+        query: { type: "string", description: "Words in the file's name or content; empty for the newest files." },
+        kind: { type: "string", enum: ["any", "image"], description: "\"image\" for pictures only." },
         maxResults: { type: "number" },
       },
       required: ["query"],
+    },
+  },
+  {
+    name: "drive_photos",
+    description: "Opens pictures (or previews of PDFs and documents) from the user's Google Drive so you and the agents can see them: they come back to you attached to the next message with their photo_ids, to pass on to design_picture (as references), ask_specialist or propose_developer_task. Use \"latest\" or \"latest:N\" for the newest pictures uploaded, or file ids from search_drive.",
+    input_schema: {
+      type: "object",
+      properties: {
+        file_ids: { type: "array", items: { type: "string" }, description: "Drive file ids, or [\"latest:2\"] for the two newest pictures. At most 6." },
+        request: { type: "string", description: "What the user wants done with them, in their words, with every exact detail they gave." },
+      },
+      required: ["file_ids", "request"],
     },
   },
 
@@ -374,7 +387,8 @@ export const toolDefinitions: Anthropic.Tool[] = [
       type: "object",
       properties: {
         use_camera: { type: "boolean", description: "True to take a photo with the webcam first." },
-        instruction: { type: "string", description: "What Design should make or change, in their words. Empty to just take a photo." },
+        instruction: { type: "string", description: "What Design should make or change. Carry over every exact word, name, number, dose, colour and layout detail the user gave, verbatim (text they typed or pasted goes in word for word, in quotes), plus what must match the reference photos. Empty to just take a photo." },
+        photo_ids: { type: "array", items: { type: "string" }, description: "Photos the user showed you (their ids from the conversation, \"latest\" or \"latest:N\") to work from: a product, packaging, an old design, a layout or style to follow. Design sees them and copies their real product, text, colours and branding instead of inventing them. Always pass them when the user refers to pictures they showed." },
       },
       required: ["use_camera", "instruction"],
     },
@@ -712,8 +726,10 @@ export async function executeTool(name: string, input: Record<string, unknown>):
     end(true, result.text.split("\n").find(l => l.trim())?.slice(0, 220));
     return result;
   } catch (err) {
-    end(false, err instanceof Error ? err.message : String(err));
-    throw err;
+    // Google's raw errors become something Sarah can tell the user to fix.
+    const message = workspace.explainGoogleError(err);
+    end(false, message);
+    throw message === (err instanceof Error ? err.message : String(err)) ? err : new Error(message);
   }
 }
 
@@ -848,7 +864,19 @@ async function runTool(name: string, input: Record<string, unknown>): Promise<To
       return { text: `Draft queued for your approval (id ${action.id}). The event has not been created yet.`, pendingAction: action };
     }
     case "search_drive":
-      return { text: reportToText(await workspace.searchDrive(input.query as string, (input.maxResults as number) || 10)) };
+      return { text: reportToText(await workspace.searchDrive(String(input.query ?? ""), (input.maxResults as number) || 10, input.kind === "image" ? "image" : "any")) };
+    case "drive_photos": {
+      const userId = currentUserOrThrow();
+      const ids = Array.isArray(input.file_ids) ? input.file_ids.map(String) : [String(input.file_ids ?? "latest")];
+      const files = await workspace.fetchDriveImages(ids);
+      const saved = [];
+      for (const f of files) saved.push(await savePhoto(userId, f.bytes, `From Drive: ${f.name}`));
+      const request = String(input.request ?? "").trim();
+      return {
+        text: `Opened ${saved.length} from Drive (${files.map(f => f.name).join(", ")}); photo_ids ${JSON.stringify(saved.map(p => p.id))}. They come back to you attached to the next message, so you can see them, then carry on with the request. Reply with one short line in their language, e.g. "Got them — taking a look."`,
+        clientAction: { type: "show_saved_photos", photos: saved.map(p => ({ id: p.id, url: p.url })), request: request || "Here are the pictures from my Drive — take a look." },
+      };
+    }
 
     case "get_crm_pipeline":
       return { text: reportToText(await crm.getPipeline()) };
@@ -1088,6 +1116,11 @@ async function runTool(name: string, input: Record<string, unknown>): Promise<To
     case "design_picture": {
       const useCamera = input.use_camera === true;
       const instruction = String(input.instruction ?? "").trim();
+      const references = useCamera ? [] : pickPhotos(currentUserOrThrow(), input.photo_ids).map(p => p.id);
+      if (references.length) return {
+        text: `Design is making the picture now from ${references.length === 1 ? "the photo" : `the ${references.length} photos`} as reference; the result appears on the user's screen. Reply with one short line in their language.`,
+        clientAction: { type: "design_picture", useCamera: false, instruction, photoIds: references },
+      };
       return {
         text: `${useCamera ? "The deck is taking the photo now and Design will work on it" : "Design is making the picture now"}; the result appears on the user's screen. Reply with one short line in their language, e.g. "On it — taking your photo now."`,
         clientAction: { type: "design_picture", useCamera, instruction },

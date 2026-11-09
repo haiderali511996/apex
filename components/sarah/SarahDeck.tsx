@@ -97,13 +97,13 @@ export default function SarahDeck() {
    * `base` when given. `photo` is the original camera shot, kept for the
    * side-by-side. Returns what Sarah says.
    */
-  const runDesign = async (instruction: string, base?: string, photo?: string): Promise<string> => {
+  const runDesign = async (instruction: string, base?: string, photo?: string, photoIds?: string[]): Promise<string> => {
     setDesign((d) => ({ photo, result: base && base !== photo ? d?.result : undefined, instruction, busy: true }));
     try {
       const res = await fetch("/api/agent/imagine", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image: base, instruction }),
+        body: JSON.stringify({ image: base, instruction, photoIds }),
       });
       const data = await res.json();
       if (!res.ok || !data.image) {
@@ -172,6 +172,8 @@ export default function SarahDeck() {
       }
       if (photoAsk !== null) return designFromCamera(photoAsk);
       const designAsk = designerCommand(text);
+      const photosShown = voice.messages.slice(-12).some(m => m.photos?.length);
+      if (designAsk && !design && photosShown) return null;
       if (designAsk) {
         // "it", "this" or "my photo" means the picture on screen; otherwise start fresh.
         const current = design?.result ?? design?.photo;
@@ -210,7 +212,10 @@ export default function SarahDeck() {
     onClientAction: async (action) => {
       if (action.type === "show_photo") return showPhoto(action.request, action.camera === "front" ? "user" : "environment");
       if (action.type !== "design_picture") return null;
-      return action.useCamera ? designFromCamera(action.instruction) : runDesign(action.instruction || "a striking picture");
+      if (action.useCamera) return designFromCamera(action.instruction);
+      // Made from photos the user showed: those go along as the references.
+      const refs = action.photoIds ?? [];
+      return runDesign(action.instruction || "a striking picture", undefined, refs.length ? `/media/shot/${refs[0]}.jpg` : undefined, refs.length ? refs : undefined);
     },
   });
 

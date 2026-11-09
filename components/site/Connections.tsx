@@ -6,7 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { Group } from "@/lib/credentials";
 
 type FieldState = { set: boolean; source: "account" | "server" | null; display: string };
-type Data = { groups: Group[]; fields: Record<string, FieldState>; googleSignedIn: boolean; owner: boolean };
+type Data = { groups: Group[]; fields: Record<string, FieldState>; googleSignedIn: boolean; connected?: Record<string, boolean>; owner: boolean };
 
 /** Every key the assistant runs on, entered once per account and stored encrypted. */
 export default function Connections() {
@@ -46,9 +46,16 @@ export default function Connections() {
     note(id, body.ok, body.message);
   };
 
-  const disconnectGoogle = async () => {
-    await fetch("/api/credentials", { method: "DELETE" });
+  /** Forgets a connection's keys (Google: the sign-in), so it can be connected again fresh. */
+  const disconnect = async (group: Group) => {
+    const what = group.id === "google" ? "Sign out of Google? Gmail, Calendar and Drive stop until you sign in again." : `Disconnect ${group.title}? Its saved keys are removed; paste new ones and Save to connect again.`;
+    if (!confirm(what)) return;
+    setBusy(group.id);
+    const res = await fetch(`/api/credentials?group=${encodeURIComponent(group.id)}`, { method: "DELETE" }).catch(() => null);
+    setBusy(null);
+    if (!res?.ok) return note(group.id, false, "Couldn't disconnect. Try again.");
     await load();
+    note(group.id, true, group.id === "google" ? "Signed out of Google." : "Disconnected.");
   };
 
   if (!data) return <div className="auth"><p style={{ color: "var(--muted)" }}>Loading your connections…</p></div>;
@@ -81,7 +88,10 @@ export default function Connections() {
         {data.groups.map(group => (
           <section className="card" key={group.id} style={{ padding: 24 }}>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "baseline" }}>
-              <h3 style={{ fontSize: 18 }}>{group.title} {group.required && <span className="plan-badge" style={{ marginLeft: 8, verticalAlign: "middle" }}>Required</span>}</h3>
+              <h3 style={{ fontSize: 18 }}>
+                {group.title} {group.required && <span className="plan-badge" style={{ marginLeft: 8, verticalAlign: "middle" }}>Required</span>}
+                <span style={{ marginLeft: 10, fontSize: 13, fontWeight: 500, color: data.connected?.[group.id] ? "var(--ok, #2fbf71)" : "var(--muted)" }}>{data.connected?.[group.id] ? "● Connected" : "○ Not connected"}</span>
+              </h3>
               {group.link && <a href={group.link.href} target="_blank" rel="noreferrer" style={{ color: "var(--accent)", fontSize: 14 }}>{group.link.text} ↗</a>}
             </div>
             <p style={{ margin: "6px 0 16px" }}>{group.why}</p>
@@ -106,8 +116,15 @@ export default function Connections() {
               <button type="button" className="btn btn-primary btn-small" disabled={busy === group.id} onClick={() => save(group)}>{busy === group.id ? "Saving…" : "Save"}</button>
               {(group.id === "gemini" || group.id === "fish") && <button type="button" className="btn btn-ghost btn-small" disabled={busy === group.id} onClick={() => test(group.id)}>Test</button>}
               {group.id === "google" && (data.googleSignedIn
-                ? <><span className="form-ok" style={{ margin: 0 }}>Signed in with Google</span><button type="button" className="btn btn-ghost btn-small" onClick={disconnectGoogle}>Disconnect</button></>
+                ? <>
+                    <span className="form-ok" style={{ margin: 0 }}>Signed in with Google</span>
+                    <a className="btn btn-ghost btn-small" href="/api/google/connect" title="Sign in again: fixes an expired connection and grants any new permissions">Reconnect Google</a>
+                    <button type="button" className="btn btn-ghost btn-small" disabled={busy === group.id} onClick={() => disconnect(group)}>Sign out</button>
+                  </>
                 : <a className="btn btn-ghost btn-small" href="/api/google/connect">Sign in with Google</a>)}
+              {group.id !== "google" && group.fields.some(f => data.fields[f.key]?.set) && (
+                <button type="button" className="btn btn-ghost btn-small" disabled={busy === group.id} onClick={() => disconnect(group)}>Disconnect</button>
+              )}
               {notes[group.id] && <span className={notes[group.id].ok ? "form-ok" : "form-error"} style={{ margin: 0 }}>{notes[group.id].text}</span>}
             </div>
           </section>

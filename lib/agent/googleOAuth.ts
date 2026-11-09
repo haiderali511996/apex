@@ -10,7 +10,9 @@ export const GOOGLE_SCOPES = [
   "https://www.googleapis.com/auth/gmail.readonly",
   "https://www.googleapis.com/auth/gmail.send",
   "https://www.googleapis.com/auth/calendar",
-  "https://www.googleapis.com/auth/drive.metadata.readonly",
+  // Read-only, but able to open files: Sarah can look at pictures and
+  // documents the user points her to, not just their names.
+  "https://www.googleapis.com/auth/drive.readonly",
   "https://www.googleapis.com/auth/spreadsheets",
   "https://www.googleapis.com/auth/webmasters.readonly",
   "https://www.googleapis.com/auth/youtube.readonly",

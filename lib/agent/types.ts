@@ -63,6 +63,8 @@ export type ActionLogEntry = {
  * tool asks the deck to carry out after the reply arrives.
  */
 export type ClientAction =
-  | { type: "design_picture"; useCamera: boolean; instruction: string }
+  | { type: "design_picture"; useCamera: boolean; instruction: string; photoIds?: string[] }
+  /** Pictures saved from elsewhere (Drive): shown in the chat, then `request` is sent with them so Sarah sees them. */
+  | { type: "show_saved_photos"; photos: { id: string; url: string }[]; request: string }
   /** Take a photo so Sarah (and the agent she hands it to) can see something; then `request` is sent with it. */
   | { type: "show_photo"; camera: "front" | "back"; request: string };

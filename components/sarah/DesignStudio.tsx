@@ -33,7 +33,7 @@ export default function DesignStudio({ work, onClose }: { work: DesignWork; onCl
       <div className={`sarah-studio-frames${work.photo ? "" : " is-single"}`}>
         {work.photo && (
           <figure>
-            <img src={work.photo} alt="Your camera photo" />
+            <img src={work.photo} alt="Your photo" />
             <figcaption>Photo</figcaption>
           </figure>
         )}
