@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { MUSIC_COMMAND_EVENT, MUSIC_STATE_EVENT, type MusicCommand, type MusicState } from "@/lib/backgroundMusic";
+import { MUSIC_COMMAND_EVENT, MUSIC_STATE_EVENT, setListeningMode, type MusicCommand, type MusicState } from "@/lib/backgroundMusic";
 import { installAudioUnlock, onGesture, resumeOnGesture } from "@/lib/audioUnlock";
 
 // Unique tracks from /public (the "(1)" copies are byte-identical duplicates, so they are skipped).
@@ -20,6 +20,11 @@ const DEFAULT_TRACKS = [
 ].map(name => `/${encodeURIComponent(name)}`);
 
 const VOLUME = 0.12; // soft, so it sits under Sarah's voice
+const LISTEN_VOLUME = 0.6; // "play music": out loud, to listen to
+const DUCK_VOLUME = 0.06; // while Sarah thinks and speaks in listening mode
+
+/** A readable name for a track URL: the file name without the store id or extension. */
+const trackName = (url: string) => decodeURIComponent(url.split("/").pop() ?? "").replace(/\.[a-z0-9]+$/i, "").replace(/[-_]\d{3,}/g, "").replace(/[-_]+/g, " ").trim();
 const STORAGE_KEY = "sarah.music.enabled";
 
 type AudioCtor = typeof AudioContext;
@@ -50,6 +55,9 @@ export default function BackgroundMusic() {
   const indexRef = useRef(0);
   // The signed-in account's own uploads replace the built-in tracks.
   const tracksRef = useRef<string[]>(DEFAULT_TRACKS);
+  // Names to match "play <song>" against: uploads by their file name, built-ins by theirs.
+  const namesRef = useRef<string[]>(DEFAULT_TRACKS.map(trackName));
+  const listenRef = useRef(false);
   const [enabled, setEnabled] = useState(true);
   const [playing, setPlaying] = useState(false);
   const [suspended, setSuspended] = useState(false);
@@ -117,10 +125,12 @@ export default function BackgroundMusic() {
     const load = async () => {
       const res = await fetch("/api/music").catch(() => null);
       const body = res?.ok ? await res.json().catch(() => null) : null;
-      const own: string[] = (body?.tracks ?? []).map((t: { id: string }) => `/api/music/${encodeURIComponent(t.id)}`);
+      const list: { id: string; name?: string }[] = body?.tracks ?? [];
+      const own: string[] = list.map(t => `/api/music/${encodeURIComponent(t.id)}`);
       const next = own.length ? own : DEFAULT_TRACKS;
       if (next.join() === tracksRef.current.join()) return;
       tracksRef.current = next;
+      namesRef.current = own.length ? list.map(t => trackName(t.name || t.id)) : DEFAULT_TRACKS.map(trackName);
       const audio = audioRef.current;
       if (!audio) return;
       const wasPlaying = !audio.paused;
@@ -139,19 +149,48 @@ export default function BackgroundMusic() {
     const onCommand = (e: Event) => {
       const audio = audioRef.current;
       if (!audio) return;
-      let command = (e as CustomEvent<MusicCommand>).detail;
+      const raw = (e as CustomEvent<MusicCommand | { command: MusicCommand; query?: string }>).detail;
+      let command = typeof raw === "string" ? raw : raw.command;
+      const query = typeof raw === "string" ? "" : (raw.query ?? "").trim().toLowerCase();
       if (command === "toggle") command = suspendedRef.current ? "play" : "pause";
+      const loud = (on: boolean) => { listenRef.current = on; setListeningMode(on); audio.volume = on ? LISTEN_VOLUME : VOLUME; };
+      // "Play music": out loud, a named song if asked for, and it keeps playing while Sarah listens.
+      if (command === "listen" || command === "next") {
+        const names = namesRef.current, tracks = tracksRef.current;
+        let index = command === "next" ? (indexRef.current + 1) % tracks.length : indexRef.current;
+        if (query) {
+          const words = query.split(/\s+/).filter(w => w.length > 2);
+          const hit = names.findIndex(n => words.length && words.every(w => n.toLowerCase().includes(w))) ;
+          const some = hit >= 0 ? hit : names.findIndex(n => words.some(w => n.toLowerCase().includes(w)));
+          if (some >= 0) index = some;
+        }
+        if (index !== indexRef.current || audio.src === "" ) { indexRef.current = index; audio.src = tracks[index]; }
+        loud(true);
+        setSuspended(false); setEnabled(true);
+        localStorage.setItem(STORAGE_KEY, "on");
+        softenOnIOS(audio, routeRef.current);
+        start();
+        return;
+      }
       // The user's own choice, asked for by voice: same as pressing the button.
       if (command === "off") {
+        loud(false);
         audio.pause();
         setPlaying(false); setSuspended(false); setEnabled(false); setBlocked(false);
         localStorage.setItem(STORAGE_KEY, "off");
         return;
       }
       if (command === "on") {
+        loud(false);
         setSuspended(false); setEnabled(true);
         localStorage.setItem(STORAGE_KEY, "on");
         start();
+        return;
+      }
+      // Listening mode only dips under Sarah's voice instead of stopping.
+      if (listenRef.current && (command === "pause" || command === "play")) {
+        audio.volume = command === "pause" ? DUCK_VOLUME : LISTEN_VOLUME;
+        if (command === "play" && audio.paused && enabledRef.current) start();
         return;
       }
       if (command === "pause") {
@@ -179,6 +218,7 @@ export default function BackgroundMusic() {
     const audio = audioRef.current;
     if (!audio) return;
     if (enabled && playing) {
+      listenRef.current = false; setListeningMode(false); audio.volume = VOLUME;
       audio.pause();
       setPlaying(false);
       setEnabled(false); setBlocked(false);

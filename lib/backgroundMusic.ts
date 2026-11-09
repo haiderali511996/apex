@@ -7,7 +7,16 @@ import { useCallback, useEffect, useState } from "react";
  * pause/play: a temporary step aside (Sarah talking) that never overrides the
  * user's choice. off/on: the user's own choice, like pressing the button.
  */
-export type MusicCommand = "pause" | "play" | "toggle" | "off" | "on";
+export type MusicCommand = "pause" | "play" | "toggle" | "off" | "on" | "listen" | "next";
+
+/**
+ * Listening mode: the user asked for music to listen to ("play music"), so it
+ * plays out loud and keeps playing while the mic listens; it only dips while
+ * Sarah thinks and speaks. Background mode is the soft ambient music.
+ */
+let listening = false;
+export const listeningMode = () => listening;
+export const setListeningMode = (on: boolean) => { listening = on; };
 
 export const MUSIC_COMMAND_EVENT = "sarah:music-command";
 export const MUSIC_STATE_EVENT = "sarah:music-state";
@@ -24,9 +33,9 @@ export interface MusicState {
  * temporary: it never changes the user's saved on/off preference, and a "play"
  * will not start music the user has switched off.
  */
-export function sendMusicCommand(command: MusicCommand) {
+export function sendMusicCommand(command: MusicCommand, query?: string) {
   if (typeof window === "undefined") return;
-  window.dispatchEvent(new CustomEvent<MusicCommand>(MUSIC_COMMAND_EVENT, { detail: command }));
+  window.dispatchEvent(new CustomEvent<MusicCommand | { command: MusicCommand; query?: string }>(MUSIC_COMMAND_EVENT, { detail: query ? { command, query } : command }));
 }
 
 export const pauseMusic = () => sendMusicCommand("pause");
@@ -35,18 +44,25 @@ export const toggleMusic = () => sendMusicCommand("toggle");
 export const musicOff = () => sendMusicCommand("off");
 export const musicOn = () => sendMusicCommand("on");
 
-// What the user says to switch Sarah's own background music, in English or
-// Roman Urdu. Only when they say background music: "play music" and "pause the
-// music" mean their computer (Chrome), which Sarah does with computer_music.
-const MUSIC = /\b(background|ambient|deck)\s+(music|song|songs|gaana|gana|gaane|gane)\b|\b(music|gaana|gana)\s+(in|of)\s+the\s+background\b/i;
-const OFF = /\b(pause|stop|mute|off|band|bund|rok|roko|rokein|rokain|hatao|silence)\b/i;
-const ON = /\b(play|start|resume|unmute|on|chala|chalao|chalaen|chalain|chalayein|lagao|laga do|shuru)\b/i;
+// What the user says to play or stop Sarah's own music, in English or Roman Urdu.
+const MUSIC = /\b(music|song|songs|gaana|gana|gaane|gane|track|tune)\b/i;
+// These mean somewhere else (YouTube, the computer's own player): Sarah handles them.
+const ELSEWHERE = /\b(youtube|you tube|laptop|pc|computer|spotify|apple music|itunes|chrome|video)\b/i;
+const BACKGROUND = /\b(background|ambient|soft|halka|halki)\b/i;
+const NEXT = /\b(next|skip|change|another|agla|aglaa|agli|doosra|dusra|doosri|dusri|badlo|badal)\b/i;
+const OFF = /\b(pause|stop|mute|off|band|bund|rok|roko|rokein|rokain|hatao|silence|bas)\b/i;
+const ON = /\b(play|start|resume|unmute|on|chala|chalao|chalaen|chalain|chalayein|lagao|laga do|shuru|sunao|bajao)\b/i;
 
-/** "pause the background music", "background music band karo" → off; "play background music" → on. */
-export function musicCommand(text: string): "on" | "off" | null {
-  if (!MUSIC.test(text) || text.length > 80) return null;
+/**
+ * "play music", "gaana chalao" → listen (out loud); "next song" → next;
+ * "pause / stop the music" → off; "play background music" → on (soft).
+ * Music on YouTube or the computer itself goes to Sarah instead.
+ */
+export function musicCommand(text: string): "on" | "off" | "listen" | "next" | null {
+  if (!MUSIC.test(text) || ELSEWHERE.test(text) || text.length > 80) return null;
   if (OFF.test(text)) return "off";
-  if (ON.test(text)) return "on";
+  if (NEXT.test(text)) return "next";
+  if (ON.test(text)) return BACKGROUND.test(text) ? "on" : "listen";
   return null;
 }
 

@@ -23,7 +23,7 @@ export async function uploadPhoto(source: File | Blob | string): Promise<ShownPh
 
 import { getRecognitionCtor, VoiceRecognition, type InputStatus } from "./voiceRecognition";
 import { CloudRecognition } from "./cloudRecognition";
-import { musicCommand, musicOff, musicOn, pauseMusic, playMusic } from "./backgroundMusic";
+import { listeningMode, musicCommand, musicOff, musicOn, pauseMusic, playMusic, sendMusicCommand } from "./backgroundMusic";
 import { chatContext } from "./userLocation";
 
 /** Quiet this long after an exchange before the background music returns. */
@@ -165,7 +165,7 @@ export function useApexVoice(options: {
     if (musicTimer.current) clearTimeout(musicTimer.current);
     musicTimer.current = setTimeout(() => {
       musicTimer.current = null;
-      if (stateRef.current !== "thinking" && stateRef.current !== "speaking" && !micOpenRef.current) playMusic();
+      if (stateRef.current !== "thinking" && stateRef.current !== "speaking" && (!micOpenRef.current || listeningMode())) playMusic();
     }, MUSIC_RESUME_MS);
   }, []);
   const setVoiceState = useCallback((value: VoiceState) => {
@@ -324,8 +324,10 @@ export function useApexVoice(options: {
       try {
         // Music on/off is answered at once, without a round trip to the agent.
         const music = musicCommand(trimmed);
-        if (music === "off") { musicOff(); localReply = "Music off."; }
-        else if (music === "on") { musicOn(); localReply = "Music on."; }
+        if (music === "off") { musicOff(); localReply = "Music paused."; }
+        else if (music === "on") { musicOn(); localReply = "Background music on."; }
+        else if (music === "listen") { sendMusicCommand("listen"); localReply = "Playing music."; }
+        else if (music === "next") { sendMusicCommand("next"); localReply = "Next song."; }
         // With a photo attached, it goes to Sarah to look at, not a screen command.
         else if (!photos.length) localReply = await localCommandRef.current?.(trimmed);
       } catch (err) {
@@ -381,7 +383,11 @@ export function useApexVoice(options: {
           let outcome: ClientActionOutcome = null;
           try {
             // Pictures already saved (from Drive): shown here and sent on, on any screen.
-            if (action.type === "show_saved_photos") outcome = { followUp: { text: action.request, photos: action.photos.map(p => ({ id: p.id, src: p.url })) } };
+            if (action.type === "app_music") {
+              sendMusicCommand(action.action === "pause" ? "off" : action.action === "next" ? "next" : "listen", action.query);
+              outcome = action.action === "pause" ? "Music paused." : action.action === "next" ? "Next song." : "Playing music.";
+            }
+            else if (action.type === "show_saved_photos") outcome = { followUp: { text: action.request, photos: action.photos.map(p => ({ id: p.id, src: p.url })) } };
             else outcome = handler ? await handler(action) : "Pictures and the camera work on the deck — open the home screen and ask me there.";
           } catch (err) {
             outcome = err instanceof Error ? err.message : "That didn't work.";
@@ -526,7 +532,8 @@ export function useApexVoice(options: {
       status: (status: InputStatus) => {
         setInputStatus(status);
         micOpenRef.current = status !== "off";
-        if (micOpenRef.current) holdMusic();
+        // Music asked for to listen to keeps playing while the mic waits.
+        if (micOpenRef.current && !listeningMode()) holdMusic();
         else if (stateRef.current !== "thinking" && stateRef.current !== "speaking") releaseMusic();
         if (status === "off" && stateRef.current === "listening") setVoiceState("idle");
         if (status === "listening" && stateRef.current === "idle") setVoiceState("listening");

@@ -522,13 +522,13 @@ export const toolDefinitions: Anthropic.Tool[] = [
   },
   {
     name: "computer_music",
-    description: "Music on the user's computer, at once (no approval). Default place is Chrome: \"play music\", \"play some Arijit Singh\", \"play lofi\" plays it from YouTube in a background Chrome tab; \"pause\", \"stop the music\", \"resume\", \"next song\" control what Chrome is playing and leave the computer's own apps alone. Only when they say from the laptop / PC / computer itself, or name Spotify or Apple Music, use place \"computer\" (its own music app).",
+    description: "Music, at once (no approval). Default place \"sarah\": Sarah's own music player in the app (the user's uploaded songs, or the built-in tracks) — use it for \"play music\", \"play a song\", \"pause\", \"next song\"; it never opens a tab. Place \"youtube\" only when they ask for something on YouTube or a specific video (\"play Tum Hi Ho on YouTube\", \"open the video …\"): it opens a new Chrome tab with the title in YouTube's search bar and plays the video; pause/resume/next with place youtube control that tab. Place \"computer\" only when they say from the laptop / PC itself, or name Spotify or Apple Music.",
     input_schema: {
       type: "object",
       properties: {
         action: { type: "string", enum: ["play", "pause", "resume", "next", "stop"] },
-        query: { type: "string", description: "For play: song, artist, album, genre or mood in their words; empty for something pleasant." },
-        place: { type: "string", enum: ["chrome", "computer"], description: "\"chrome\" (default) or \"computer\" for its own music app." },
+        query: { type: "string", description: "For play: the song, video title or artist in their words; empty for any music." },
+        place: { type: "string", enum: ["sarah", "youtube", "computer"], description: "\"sarah\" (default), \"youtube\" or \"computer\"." },
         computer: { type: "string" },
       },
       required: ["action"],
@@ -1030,9 +1030,14 @@ async function runTool(name: string, input: Record<string, unknown>): Promise<To
       return { text: `${device.name}: ${await runOnDevice(userId, device.id, action, args)}` };
     }
     case "computer_music": {
-      const userId = currentUserOrThrow(), device = pickDevice(userId, input.computer as string | undefined);
       const action = String(input.action ?? "play"), query = String(input.query ?? "").trim();
-      const chrome = input.place !== "computer";
+      // Sarah's own player, in the app: no computer needed.
+      if (input.place !== "youtube" && input.place !== "computer") {
+        const what = action === "pause" || action === "stop" ? "pause" : action === "next" ? "next" : "play";
+        return { text: "Done in Sarah's music player. Reply with a couple of words at most, or nothing.", clientAction: { type: "app_music", action: what, ...(query ? { query } : {}) } };
+      }
+      const chrome = input.place === "youtube";
+      const userId = currentUserOrThrow(), device = pickDevice(userId, input.computer as string | undefined);
       try {
         if (chrome) return { text: `${device.name}: ${await runOnDevice(userId, device.id, "chrome_music", { action, query }, 40_000)}` };
         const local = action === "resume" ? "play" : action === "stop" ? "pause" : action;

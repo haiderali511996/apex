@@ -510,23 +510,44 @@ export const ACTIONS = {
   },
 
   /**
-   * Music in Chrome, in the background: play finds the song (or a mix for a
-   * mood or genre) on YouTube and plays it in a Chrome tab without bringing
-   * Chrome to the front; pause, resume, next and stop control what Chrome is
-   * playing, leaving the computer's own music apps alone.
+   * YouTube in Chrome, only when asked for: play opens a new tab with the
+   * title in YouTube's search bar and plays the top video; pause, resume,
+   * next and stop control what Chrome is playing.
    */
   async chrome_music({ action, query }) {
     if (action === "play") {
-      const q = String(query || "").trim() || "relaxing music mix";
-      const id = await youtubeFirst(q);
-      if (!id) throw new Error(`YouTube found nothing for "${q}".`);
-      // The video's own mix keeps music going after it ends.
-      const url = `https://www.youtube.com/watch?v=${id}&list=RD${id}`;
+      const q = String(query || "").trim();
+      if (!q) throw new Error("Which video? Say its title.");
+      // A new tab with the title in YouTube's search bar, then the top video plays.
+      const search = `https://www.youtube.com/results?search_query=${encodeURIComponent(q)}`;
+      const id = await youtubeFirst(q).catch(() => null);
       await chromeMusicPause().catch(() => {}); // one thing at a time
-      if (PLATFORM === "darwin") await sh("open", ["-g", "-a", "Google Chrome", url]);
-      else if (PLATFORM === "win32") await powershell(`Start-Process ${psq(chromeBinary())} -ArgumentList ${psq(url)} -WindowStyle Minimized`);
-      else run(chromeBinary(), [url], { detached: true }).catch(() => {});
-      return `Playing "${q}" from YouTube in Chrome, in the background.`;
+      if (PLATFORM === "darwin") {
+        await osascript(`on run argv
+          tell application "Google Chrome"
+            activate
+            if (count of windows) is 0 then make new window
+            tell front window to make new tab with properties {URL:item 1 of argv}
+          end tell
+        end run`, [search]);
+        if (id) {
+          await new Promise(r => setTimeout(r, 3500));
+          // Clicking the result keeps the title in the search bar; without
+          // Chrome's JavaScript setting the tab goes straight to the video.
+          const js = `(()=>{const a=document.querySelector('ytd-video-renderer a#video-title, ytd-video-renderer a#thumbnail');if(!a)return 'no';a.click();return 'yes'})()`;
+          const clicked = await osascript(`on run argv
+            tell application "Google Chrome" to tell active tab of front window to return execute javascript (item 1 of argv)
+          end run`, [js]).catch(() => "no");
+          if (clicked !== "yes") await osascript(`on run argv
+            tell application "Google Chrome" to set URL of active tab of front window to item 1 of argv
+          end run`, [`https://www.youtube.com/watch?v=${id}`]).catch(() => {});
+        }
+      } else {
+        const url = id ? `https://www.youtube.com/watch?v=${id}` : search;
+        if (PLATFORM === "win32") await powershell(`Start-Process ${psq(chromeBinary())} -ArgumentList ${psq(url)}`);
+        else run(chromeBinary(), [url], { detached: true }).catch(() => {});
+      }
+      return id ? `Opened "${q}" on YouTube in a new Chrome tab, playing.` : `Searched YouTube for "${q}" in a new Chrome tab.`;
     }
     if (action === "pause" || action === "stop") return chromeMusicPause(action === "stop");
     if (action === "resume") return chromeMusicResume();
