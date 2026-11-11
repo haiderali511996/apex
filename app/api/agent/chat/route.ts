@@ -9,7 +9,7 @@ import { readPhoto } from "@/lib/photos";
 import type { ClientAction, PendingAction } from "@/lib/agent/types";
 import { requireUser } from "@/lib/auth";
 import type { Persona } from "@/lib/persona";
-import { enterUser } from "@/lib/credentials";
+import { enterUser, setRequestText } from "@/lib/credentials";
 import { learnFromTurn, logTurn, memoryBrief, sessionTurnCount } from "@/lib/memory";
 import { enginesBrief } from "@/lib/agentEngines";
 import { emailBrief } from "@/lib/agent/connectors/mailbox";
@@ -180,6 +180,7 @@ export async function POST(req: NextRequest) {
   if (!Array.isArray(messages) || !messages.length) {
     return NextResponse.json({ error: "messages is required" }, { status: 400 });
   }
+  setRequestText(String([...messages].reverse().find(m => m.role === "user")?.content ?? ""));
 
   if (BACKEND === "gemini" || !isOwner) {
     try {

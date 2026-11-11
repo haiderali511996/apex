@@ -45,7 +45,7 @@ export const musicOff = () => sendMusicCommand("off");
 export const musicOn = () => sendMusicCommand("on");
 
 // What the user says to play or stop Sarah's own music, in English or Roman Urdu.
-const MUSIC = /\b(music|song|songs|gaana|gana|gaane|gane|track|tune)\b/i;
+const MUSIC = /\b(music|musik|mucis|muzic|musci|song|songs|gaana|gana|gaane|gane|track|tune)\b/i;
 // These mean somewhere else (YouTube, the computer's own player): Sarah handles them.
 const ELSEWHERE = /\b(youtube|you tube|laptop|pc|computer|spotify|apple music|itunes|chrome|video)\b/i;
 const BACKGROUND = /\b(background|ambient|soft|halka|halki)\b/i;

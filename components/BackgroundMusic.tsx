@@ -58,6 +58,8 @@ export default function BackgroundMusic() {
   // Names to match "play <song>" against: uploads by their file name, built-ins by theirs.
   const namesRef = useRef<string[]>(DEFAULT_TRACKS.map(trackName));
   const listenRef = useRef(false);
+  // The volume the user asked for: soft background, or out loud.
+  const levelRef = useRef(VOLUME);
   const [enabled, setEnabled] = useState(true);
   const [playing, setPlaying] = useState(false);
   const [suspended, setSuspended] = useState(false);
@@ -153,7 +155,12 @@ export default function BackgroundMusic() {
       let command = typeof raw === "string" ? raw : raw.command;
       const query = typeof raw === "string" ? "" : (raw.query ?? "").trim().toLowerCase();
       if (command === "toggle") command = suspendedRef.current ? "play" : "pause";
-      const loud = (on: boolean) => { listenRef.current = on; setListeningMode(on); audio.volume = on ? LISTEN_VOLUME : VOLUME; };
+      // Music the user asked for (by voice or the button) keeps playing while
+      // Sarah listens, at the level they asked for; it only dips while she talks.
+      const keep = (level: number | null) => {
+        listenRef.current = level !== null; setListeningMode(level !== null);
+        levelRef.current = level ?? VOLUME; audio.volume = levelRef.current;
+      };
       // "Play music": out loud, a named song if asked for, and it keeps playing while Sarah listens.
       if (command === "listen" || command === "next") {
         const names = namesRef.current, tracks = tracksRef.current;
@@ -165,7 +172,7 @@ export default function BackgroundMusic() {
           if (some >= 0) index = some;
         }
         if (index !== indexRef.current || audio.src === "" ) { indexRef.current = index; audio.src = tracks[index]; }
-        loud(true);
+        keep(LISTEN_VOLUME);
         setSuspended(false); setEnabled(true);
         localStorage.setItem(STORAGE_KEY, "on");
         softenOnIOS(audio, routeRef.current);
@@ -174,14 +181,14 @@ export default function BackgroundMusic() {
       }
       // The user's own choice, asked for by voice: same as pressing the button.
       if (command === "off") {
-        loud(false);
+        keep(null);
         audio.pause();
         setPlaying(false); setSuspended(false); setEnabled(false); setBlocked(false);
         localStorage.setItem(STORAGE_KEY, "off");
         return;
       }
       if (command === "on") {
-        loud(false);
+        keep(VOLUME);
         setSuspended(false); setEnabled(true);
         localStorage.setItem(STORAGE_KEY, "on");
         start();
@@ -189,7 +196,7 @@ export default function BackgroundMusic() {
       }
       // Listening mode only dips under Sarah's voice instead of stopping.
       if (listenRef.current && (command === "pause" || command === "play")) {
-        audio.volume = command === "pause" ? DUCK_VOLUME : LISTEN_VOLUME;
+        audio.volume = command === "pause" ? Math.min(DUCK_VOLUME, levelRef.current / 2) : levelRef.current;
         if (command === "play" && audio.paused && enabledRef.current) start();
         return;
       }
@@ -224,6 +231,8 @@ export default function BackgroundMusic() {
       setEnabled(false); setBlocked(false);
       localStorage.setItem(STORAGE_KEY, "off");
     } else {
+      // Pressed on: the user wants it, so it plays on while Sarah listens.
+      listenRef.current = true; setListeningMode(true); levelRef.current = VOLUME; audio.volume = VOLUME;
       setEnabled(true);
       localStorage.setItem(STORAGE_KEY, "on");
       softenOnIOS(audio, routeRef.current);

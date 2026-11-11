@@ -188,7 +188,7 @@ export function saveCredentials(userId: string, values: Record<string, string>) 
 
 // ── The current request's keys ──
 
-type Context = { userId: string; owner: boolean; values: Record<string, string> };
+type Context = { userId: string; owner: boolean; values: Record<string, string>; request?: string };
 const context = new AsyncLocalStorage<Context>();
 
 /**
@@ -203,6 +203,16 @@ export function enterUser(userId: string, owner: boolean) {
 /** Runs background work (no request) as one account, on its own keys. */
 export function runAsUser<T>(userId: string, owner: boolean, fn: () => Promise<T>): Promise<T> {
   return context.run({ userId, owner, values: loadCredentials(userId) }, fn);
+}
+
+/** What the user just said or typed, so tools can check they were really asked. */
+export function setRequestText(text: string) {
+  const ctx = context.getStore();
+  if (ctx) ctx.request = text;
+}
+
+export function currentRequestText(): string | undefined {
+  return context.getStore()?.request;
 }
 
 export function currentUserId(): string | undefined {

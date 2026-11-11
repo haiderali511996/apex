@@ -22,15 +22,30 @@ type Callbacks = {
   warning?(message: string): void;
   /** The voice was detected: someone has started talking. */
   speech?(): void;
+  /** In barge mode: the user has started talking over Sarah. */
+  bargeIn?(): void;
+  /** In barge mode: that turned out to be nothing (noise, too faint, no words). */
+  bargeOff?(): void;
 };
+
+/**
+ * "barge" listens while Sarah is thinking or speaking, so the user can cut in.
+ * It needs a clearer, closer voice to open a turn, so her own voice leaking
+ * past echo cancellation doesn't interrupt her.
+ */
+export type CloudMode = InputMode | "barge";
 
 const RATE = 16000;
 /** Quiet this long after speaking ends the turn; short pauses to think don't. */
-const END_SILENCE_MS = 850;
+const END_SILENCE_MS = 650;
 /** Audio kept from just before the voice was detected. */
 const PRE_ROLL_MS = 400;
 /** Sustained voice needed to count as speech rather than a click or a cough. */
 const START_MS = 180;
+/** Talking over Sarah: voice this long stops her. */
+const BARGE_START_MS = 240;
+/** Talking over Sarah needs this share of the user's usual level. */
+const BARGE_SHARE = 0.6;
 /** A turn with less voice than this is noise and isn't sent. */
 const MIN_VOICE_MS = 450;
 const MAX_TURN_MS = 45_000;
@@ -63,7 +78,7 @@ export class CloudRecognition {
 
   /** Conversation mode: keep the mic open between turns instead of releasing it. */
   keepAlive = false;
-  private mode: InputMode | null = null;
+  private mode: CloudMode | null = null;
   private disposed = false;
   // Bumped on every mode change, so a transcription for a turn the user has
   // since abandoned is dropped instead of sent.
@@ -108,8 +123,11 @@ export class CloudRecognition {
     try { localStorage.setItem(LEVEL_KEY, JSON.stringify({ level: this.userLevel, turns: this.userTurns })); } catch { /* fine */ }
   }
 
-  setMode(mode: InputMode | null) {
+  setMode(mode: CloudMode | null) {
     if (this.disposed) return;
+    if (mode === "barge" && this.mode === "barge") return;
+    // Sarah finished while the user was already talking over her: keep their turn.
+    if (this.mode === "barge" && mode === "command" && (this.speaking || this.sending)) { this.mode = mode; return; }
     this.generation++;
     this.mode = mode;
     this.resetTurn();
@@ -164,7 +182,8 @@ export class CloudRecognition {
     const w = window as unknown as { AudioContext?: AudioCtor; webkitAudioContext?: AudioCtor };
     const ctx = new (w.AudioContext || w.webkitAudioContext)!();
     const source = ctx.createMediaStreamSource(stream);
-    const processor = ctx.createScriptProcessor(4096, 1, 1);
+    // Small blocks, so the start and end of speech are noticed within ~40 ms.
+    const processor = ctx.createScriptProcessor(2048, 1, 1);
     processor.onaudioprocess = event => this.onAudio(event.inputBuffer.getChannelData(0), ctx.sampleRate);
     source.connect(processor);
     // A processor only runs while connected; it outputs silence.
@@ -196,6 +215,7 @@ export class CloudRecognition {
 
   private skipTurn(message: string) {
     this.sending = false;
+    if (this.mode === "barge") this.callbacks.bargeOff?.();
     this.callbacks.interim("");
     this.callbacks.warning?.(message);
   }
@@ -211,7 +231,10 @@ export class CloudRecognition {
     const floor = Math.max(0.008, this.noise * 3);
     const loud = level > floor;
     // A turn opens only for a voice near the user's own level.
-    const near = level > Math.max(floor, this.learned ? this.userLevel * START_SHARE : 0);
+    const barge = this.mode === "barge";
+    const near = level > Math.max(floor, barge
+      ? (this.learned ? this.userLevel * BARGE_SHARE : floor * 2.5)
+      : (this.learned ? this.userLevel * START_SHARE : 0));
     if (!this.speaking && !loud) this.noise = Math.max(0.002, this.noise * 0.95 + level * 0.05);
 
     if (loud && (this.speaking || near)) { this.voicedRun += ms; this.silentRun = 0; } else { this.voicedRun = 0; if (this.speaking) this.silentRun += ms; }
@@ -219,9 +242,10 @@ export class CloudRecognition {
     if (!this.speaking) {
       this.preRoll.push(pcm);
       while (this.preRoll.length > 1 && this.preRoll.length * ms > PRE_ROLL_MS) this.preRoll.shift();
-      if (this.voicedRun < START_MS) return;
+      if (this.voicedRun < (barge ? BARGE_START_MS : START_MS)) return;
       this.speaking = true;
       this.callbacks.speech?.();
+      if (barge) this.callbacks.bargeIn?.();
       this.chunks = this.preRoll; this.preRoll = [];
       this.turnMs = this.chunks.length * ms;
       this.voicedTotal = this.voicedRun;
@@ -239,8 +263,10 @@ export class CloudRecognition {
     const chunks = this.chunks, voiced = this.voicedTotal;
     const level = voiced ? this.levelSum / voiced : 0;
     this.resetTurn();
-    if (voiced < MIN_VOICE_MS) return;
+    const nothing = () => { if (this.mode === "barge") this.callbacks.bargeOff?.(); };
+    if (voiced < MIN_VOICE_MS) return nothing();
     if (this.learned && level < this.userLevel * NEAR_SHARE) {
+      nothing();
       // Someone further away. If several turns in a row fall short but are
       // still fairly close, the user has probably moved back from the mic.
       if (level >= this.userLevel * START_SHARE && ++this.dropped >= 4) { this.userLevel *= 0.8; this.dropped = 0; }
@@ -277,7 +303,7 @@ export class CloudRecognition {
       return;
     }
     this.sending = false;
-    if (!text || !mode) { this.callbacks.interim(""); return; }
+    if (!text || !mode) { this.callbacks.interim(""); if (mode === "barge") this.callbacks.bargeOff?.(); return; }
     const command = mode === "wake" ? matchWake(text) : matchWake(text) ?? text;
     // Without the wake phrase there is nothing to act on; keep listening.
     if (command === null) { this.callbacks.interim(""); return; }
@@ -285,7 +311,11 @@ export class CloudRecognition {
     this.learnLevel(level);
     this.callbacks.interim(text);
     // A bare "Hey Sarah" opens direct listening for the request that follows.
-    if (!command) { this.setMode("command"); return; }
+    // Said over Sarah, it stops her and she listens (an empty transcript).
+    if (!command) {
+      if (mode === "barge") { this.setMode(null); this.callbacks.transcript(""); return; }
+      this.setMode("command"); return;
+    }
     this.setMode(null);
     this.callbacks.transcript(command);
   }

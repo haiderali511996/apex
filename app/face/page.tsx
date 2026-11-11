@@ -6,7 +6,7 @@ import CameraView from "@/components/CameraView";
 import { useApexVoice } from "@/lib/useApexVoice";
 import { useCamera } from "@/lib/useCamera";
 import { useHandTracking } from "@/lib/handTracking";
-import { readCommand, readPhoneMessage } from "@/lib/localCommands";
+import { cameraCommand, readCommand, readPhoneMessage } from "@/lib/localCommands";
 import { usePhoneWatch } from "@/lib/phoneWatch";
 
 export default function FacePreview() {
@@ -16,6 +16,10 @@ export default function FacePreview() {
   const voice = useApexVoice({
     onLocalCommand: async text => {
       if (readCommand(text)) return readPhoneMessage(camera);
+      // Camera on/off is done here at once, the same as on the deck.
+      const cam = cameraCommand(text);
+      if (cam === "close") { camera.stop(); return "Camera off."; }
+      if (cam === "open") return (await camera.start()) ? "Camera on." : camera.error ?? "I couldn't open the camera.";
       if (/\b(hide|close|dismiss)\b.*\b(face|yourself)\b|\b(back|return)\b.*\b(graph|home)\b/i.test(text)) {
         router.push("/");
         return "Back to the graph.";

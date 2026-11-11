@@ -9,7 +9,18 @@ import { askSpecialist } from "./specialist";
 import { SPECIALISTS, specialistKeys } from "./roles";
 import { askAboutChats, askDeveloper, listProjects, nameProject, resolveProject } from "./developer";
 import { claudeComputer, isOnline, listDevices, pickDevice, queueOnDevice, runOnDevice } from "@/lib/devices";
-import { currentUserId } from "@/lib/credentials";
+import { currentUserId, currentRequestText } from "@/lib/credentials";
+
+/**
+ * YouTube opens only when the user asked for it. "Play music" plays Sarah's
+ * own player; the model sometimes reached for YouTube anyway (a song not in
+ * the library), opening a tab nobody asked for. With no request text known
+ * (background work), the model's choice stands.
+ */
+function youtubeAsked(): boolean {
+  const said = currentRequestText();
+  return said === undefined || /\b(you ?tube|yt|video|videos|vlog)\b|youtube\.com|youtu\.be/i.test(said);
+}
 import { findDesign, listDesigns } from "@/lib/designs";
 import { pickPhotos, savePhoto } from "@/lib/photos";
 import { analyze } from "@/lib/trading/analyst";
@@ -1019,6 +1030,7 @@ async function runTool(name: string, input: Record<string, unknown>): Promise<To
       return { text: `${device.name}: ${await runOnDevice(userId, device.id, "open_app", { name: input.name })}` };
     }
     case "computer_open_url": {
+      if (/youtube\.com|youtu\.be/i.test(String(input.url ?? "")) && !youtubeAsked()) return { text: "Not opened: they didn't ask for YouTube. For music use computer_music with place \"sarah\"." };
       const userId = currentUserOrThrow(), device = pickDevice(userId, input.computer as string | undefined);
       return { text: `${device.name}: ${await runOnDevice(userId, device.id, "open_url", { url: input.url, chrome_profile: input.chrome_profile })}` };
     }
@@ -1031,8 +1043,8 @@ async function runTool(name: string, input: Record<string, unknown>): Promise<To
     }
     case "computer_music": {
       const action = String(input.action ?? "play"), query = String(input.query ?? "").trim();
-      // Sarah's own player, in the app: no computer needed.
-      if (input.place !== "youtube" && input.place !== "computer") {
+      // Sarah's own player, in the app: no computer needed. YouTube only when they said so.
+      if ((input.place !== "youtube" && input.place !== "computer") || (input.place === "youtube" && !youtubeAsked())) {
         const what = action === "pause" || action === "stop" ? "pause" : action === "next" ? "next" : "play";
         return { text: "Done in Sarah's music player. Reply with a couple of words at most, or nothing.", clientAction: { type: "app_music", action: what, ...(query ? { query } : {}) } };
       }
@@ -1090,6 +1102,7 @@ async function runTool(name: string, input: Record<string, unknown>): Promise<To
     case "mac_list_chrome_profiles":
       return { text: (await listChromeProfiles()).map(p => `${p.name}${p.email ? ` — ${p.email}` : ""}`).join("\n") };
     case "mac_open_url":
+      if (/youtube\.com|youtu\.be/i.test(String(input.url ?? "")) && !youtubeAsked()) return { text: "Not opened: they didn't ask for YouTube. For music use computer_music with place \"sarah\"." };
       return { text: await openUrl(input.url as string, { chromeProfile: input.chrome_profile as string | undefined, browser: input.browser as string | undefined }) };
     case "mac_list_chrome_tabs":
       return { text: await listChromeTabs() };

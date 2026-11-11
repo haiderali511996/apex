@@ -58,7 +58,30 @@ let frame = 0;
 let abort: AbortController | null = null;
 let finishCanceled: (() => void) | null = null;
 
+/**
+ * Held while the user talks over Sarah: the voice pauses where it is, and a
+ * piece that arrives meanwhile waits. Released, it carries on from there.
+ */
+let held = false;
+let startWhenReleased: (() => void) | null = null;
+
+export function holdNeuralSpeech() {
+  held = true;
+  audio?.pause();
+}
+
+export function releaseNeuralSpeech() {
+  if (!held) return;
+  held = false;
+  const start = startWhenReleased;
+  startWhenReleased = null;
+  if (start) start();
+  else if (audio?.paused && audio.getAttribute("src")) void audio.play().catch(() => {});
+}
+
 export function cancelNeuralSpeech() {
+  held = false;
+  startWhenReleased = null;
   resetSpeechMotion();
   finishCanceled?.();
   finishCanceled = null;
@@ -260,7 +283,7 @@ function playPiece(payload: TtsResponse, piece: Piece, handlers: SpeakHandlers, 
       if (decoder) void decoder.close().catch(() => {});
       decoder = null;
       decoded = null;
-      clearTimeout(startTimeout);
+      if (startTimeout) clearTimeout(startTimeout);
       finishCanceled = null;
       if (frame) cancelAnimationFrame(frame);
       frame = 0;
@@ -272,12 +295,7 @@ function playPiece(payload: TtsResponse, piece: Piece, handlers: SpeakHandlers, 
       objectUrl = null;
       resolve(value);
     };
-    const startTimeout = setTimeout(() => {
-      if (settled) return;
-      unavailableReason = "Audio did not start. Click Test Sound to enable playback, and check that the tab is unmuted.";
-      if (audio) audio.pause();
-      finish("failed");
-    }, 10_000);
+    let startTimeout: ReturnType<typeof setTimeout> | undefined;
     finishCanceled = () => finish("canceled");
 
     const blob = base64ToBlob(payload.audioBase64, payload.mimeType || "audio/mpeg");
@@ -325,11 +343,14 @@ function playPiece(payload: TtsResponse, piece: Piece, handlers: SpeakHandlers, 
       frame = requestAnimationFrame(tick);
     };
 
+    let began = false;
     el.onplaying = () => {
       everWorked = true;
-      clearTimeout(startTimeout);
+      if (startTimeout) clearTimeout(startTimeout);
       if (frame) cancelAnimationFrame(frame);
-      if (first) handlers.onStart?.(cues.length > 0);
+      // Playing again after a hold is not a new start.
+      if (first && !began) handlers.onStart?.(cues.length > 0);
+      began = true;
       frame = requestAnimationFrame(tick);
     };
     el.onended = () => {
@@ -356,6 +377,14 @@ function playPiece(payload: TtsResponse, piece: Piece, handlers: SpeakHandlers, 
       unavailableReason = reason;
       finish("failed");
     };
+    const begin = () => {
+    if (settled) return;
+    startTimeout = setTimeout(() => {
+      if (settled) return;
+      unavailableReason = "Audio did not start. Click Test Sound to enable playback, and check that the tab is unmuted.";
+      if (audio) audio.pause();
+      finish("failed");
+    }, 10_000);
     el.play().catch((err: unknown) => {
       if (settled) return;
       if ((err as Error)?.name !== "NotAllowedError") return giveUp("Audio playback failed to start.");
@@ -372,5 +401,9 @@ function playPiece(payload: TtsResponse, piece: Piece, handlers: SpeakHandlers, 
       finishCanceled = () => { stopWaiting?.(); stopWaiting = null; prevCancel?.(); };
       setTimeout(() => { if (!settled && el.paused) giveUp("Sound is blocked until you tap the page. Tap anywhere, then ask again."); }, 120_000);
     });
+    };
+    // The user is talking over Sarah: this piece waits until they're done.
+    if (held) startWhenReleased = begin;
+    else begin();
   });
 }

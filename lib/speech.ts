@@ -18,7 +18,7 @@
  */
 
 import { updateSpeechMotion, resetSpeechMotion } from "./speechMotion";
-import { speakNeural, cancelNeuralSpeech, neuralVoiceRuledOut, neuralVoiceReason, neuralVoiceWorked } from "./neuralVoice";
+import { speakNeural, cancelNeuralSpeech, holdNeuralSpeech, releaseNeuralSpeech, neuralVoiceRuledOut, neuralVoiceReason, neuralVoiceWorked } from "./neuralVoice";
 
 // (3) — a module-level reference keeps the utterance alive while it speaks.
 let active: SpeechSynthesisUtterance | null = null;
@@ -83,6 +83,20 @@ export function cancelSpeech() {
     // nothing to cancel
   }
   active = null;
+}
+
+/** Pauses Sarah mid-word while the user talks over her. */
+export function holdSpeech() {
+  holdNeuralSpeech();
+  if (!synthAvailable()) return;
+  try { if (window.speechSynthesis.speaking) window.speechSynthesis.pause(); } catch { /* nothing playing */ }
+}
+
+/** Carries on from where holdSpeech paused, when the interruption was nothing. */
+export function releaseSpeech() {
+  releaseNeuralSpeech();
+  if (!synthAvailable()) return;
+  try { if (window.speechSynthesis.paused) window.speechSynthesis.resume(); } catch { /* nothing paused */ }
 }
 
 /**
