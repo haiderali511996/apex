@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'self' 'unsafe-inline'" />
+  <title>UNC Assistant</title>
+  <style>
+    :root { --bg: #050d14; --card: #0a1822; --line: #1c3442; --text: #e8f6f8; --muted: #8aa6b0; --accent: #35e1de; --warm: #eab86a; --bad: #ff8a80; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: radial-gradient(circle at 50% 0%, #0d2b36 0, var(--bg) 60%); color: var(--text); font: 15px/1.5 -apple-system, "Segoe UI", Roboto, Ubuntu, sans-serif; display: flex; align-items: center; justify-content: center; padding: 28px; }
+    main { width: 100%; max-width: 340px; text-align: center; }
+    img { width: 84px; height: 84px; border-radius: 20px; box-shadow: 0 0 40px rgba(53, 225, 222, .25); }
+    h1 { font-size: 21px; margin: 16px 0 4px; }
+    p { color: var(--muted); margin: 0 0 22px; font-size: 14px; }
+    form { display: grid; gap: 12px; text-align: left; }
+    label { font-size: 13px; color: var(--muted); display: grid; gap: 5px; }
+    input { width: 100%; padding: 11px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); color: var(--text); font: inherit; outline: none; }
+    input:focus { border-color: var(--accent); }
+    button { margin-top: 4px; padding: 12px; border: 0; border-radius: 10px; background: var(--accent); color: #032025; font: 600 15px/1 inherit; cursor: pointer; }
+    button:disabled { opacity: .6; cursor: wait; }
+    details { font-size: 13px; color: var(--muted); }
+    summary { cursor: pointer; }
+    details label { margin-top: 8px; }
+    .msg { min-height: 20px; font-size: 14px; margin-top: 4px; text-align: center; }
+    .bad { color: var(--bad); } .good { color: #7ee2a8; }
+    .foot { margin-top: 18px; font-size: 13px; }
+    a { color: var(--accent); text-decoration: none; cursor: pointer; }
+    .tools { margin-top: 22px; border-top: 1px solid var(--line); padding-top: 14px; font-size: 13px; color: var(--muted); text-align: left; display: grid; gap: 6px; }
+    .tools b { color: var(--text); font-weight: 600; }
+  </style>
+</head>
+<body>
+  <main>
+    <img src="../icons/icon.png" alt="" />
+    <h1>Link this computer</h1>
+    <p id="intro">Sign in with your assistant account.</p>
+    <form id="form">
+      <label>Email <input id="email" type="email" autocomplete="username" required autofocus /></label>
+      <label>Password <input id="password" type="password" autocomplete="current-password" required /></label>
+      <details><summary>Advanced</summary><label>Server <input id="server" type="url" /></label></details>
+      <button id="go" type="submit">Sign in</button>
+      <div id="msg" class="msg" role="status"></div>
+    </form>
+    <div class="foot">No account? <a id="signup">Start a free trial</a></div>
+    <div id="tools" class="tools"></div>
+  </main>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let server = "";
+    window.unc.defaults().then((d) => {
+      server = d.server; $("server").value = d.server;
+      $("intro").textContent = `Sign in with your assistant account to link ${d.computer} (${d.os}).`;
+    });
+    // Only shown when something is missing: one click opens the official download for this computer.
+    window.unc.tools().then((tools) => {
+      const missing = tools.filter((t) => !t.version);
+      if (!missing.length) return;
+      $("tools").innerHTML = "<div>Optional — not needed to link this computer:</div>";
+      for (const t of missing) {
+        const row = document.createElement("div");
+        const a = document.createElement("a");
+        a.textContent = `Download ${t.name}`;
+        a.onclick = () => window.unc.open(t.download);
+        row.append(a, document.createTextNode(` — ${t.why}`));
+        $("tools").append(row);
+      }
+    });
+    $("signup").onclick = () => window.unc.open(`${$("server").value || server}/signup`);
+    $("form").onsubmit = async (e) => {
+      e.preventDefault();
+      $("go").disabled = true; $("msg").className = "msg"; $("msg").textContent = "Signing in…";
+      const result = await window.unc.signIn({ server: $("server").value.trim(), email: $("email").value.trim(), password: $("password").value });
+      $("go").disabled = false;
+      $("msg").className = `msg ${result.ok ? "good" : "bad"}`;
+      $("msg").textContent = result.ok ? `${result.message} You can close this window — it keeps running in the ${navigator.platform.startsWith("Mac") ? "menu bar" : "system tray"}.` : result.error;
+      if (result.ok) $("password").value = "";
+    };
+  </script>
+</body>
+</html>

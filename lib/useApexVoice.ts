@@ -1,16 +1,49 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { PendingAction } from "./agent/types";
-import { speakText, cancelSpeech, speechAvailable } from "./speech";
+import type { ClientAction, PendingAction } from "./agent/types";
+import { speakText, cancelSpeech, speechAvailable, holdSpeech, releaseSpeech } from "./speech";
 
 export type VoiceState = "idle" | "listening" | "thinking" | "speaking";
-export type ChatMessage = { role: "user" | "assistant"; content: string };
+/** A photo shown to Sarah: its saved id, and a picture to show in the conversation. */
+export type ShownPhoto = { id: string; src: string };
+export type ChatMessage = { role: "user" | "assistant"; content: string; photos?: ShownPhoto[] };
+/** What a screen action reports: a line to say, or a message to send on (with the photo just taken). */
+export type ClientActionOutcome = string | null | { say?: string; followUp: { text: string; photos: ShownPhoto[] } };
+
+/** Saves a photo or screenshot on the server so Sarah and her agents can see it. */
+export async function uploadPhoto(source: File | Blob | string): Promise<ShownPhoto> {
+  const res = typeof source === "string"
+    ? await fetch("/api/agent/photo", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ image: source }) })
+    : await (() => { const form = new FormData(); form.append("photo", source, source instanceof File ? source.name : "photo.png"); return fetch("/api/agent/photo", { method: "POST", body: form }); })();
+  const body = await res.json().catch(() => ({})) as { id?: string; error?: string };
+  if (!res.ok || !body.id) throw new Error(body.error || "Couldn't upload the picture.");
+  return { id: body.id, src: typeof source === "string" ? source : URL.createObjectURL(source) };
+}
 
 import { getRecognitionCtor, VoiceRecognition, type InputStatus } from "./voiceRecognition";
+import { CloudRecognition } from "./cloudRecognition";
+import { listeningMode, musicCommand, musicOff, musicOn, pauseMusic, playMusic, sendMusicCommand } from "./backgroundMusic";
+import { chatContext } from "./userLocation";
+
+/** Quiet this long after an exchange before the background music returns. */
+const MUSIC_RESUME_MS = 3000;
+
+/**
+ * True when what the mic heard over Sarah is mostly her own words coming back
+ * through the speakers, not the user cutting in. A few words of the user's
+ * ("stop", "wait, no") always count as them.
+ */
+export function soundsLikeEcho(heard: string, said: string): boolean {
+  const words = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, " ").split(/\s+/).filter(Boolean);
+  const heardWords = words(heard);
+  if (heardWords.length < 4) return false;
+  const saidWords = new Set(words(said));
+  return heardWords.filter(w => saidWords.has(w)).length / heardWords.length >= 0.85;
+}
 
 export function speechSupported(): boolean {
-  return Boolean(getRecognitionCtor());
+  return CloudRecognition.supported() || Boolean(getRecognitionCtor());
 }
 
 /** Where the chosen voice is remembered between visits. */
@@ -19,21 +52,17 @@ export const VOICE_STORAGE_KEY = "apex.voice";
 /**
  * Fallback order when nothing has been chosen yet. The browser's own default
  * is usually the flattest voice installed, so name the good ones first:
- * Daniel and Serena are macOS British, the Google ones are Chrome's.
+ * Daniel and Serena are macOS British, Samantha macOS American.
  */
-const VOICE_PREFERENCES = [
-  "Google UK English Male",
-  "Daniel",
-  "Serena",
-  "Google UK English Female",
-  "Google US English",
-  "Samantha",
-];
+const VOICE_PREFERENCES = ["Daniel", "Serena", "Samantha"];
 
-/** English voices only — the roster runs to ~200 entries across every language. */
+/**
+ * English voices installed on this machine — the macOS ones. Chrome's online
+ * "Google" voices are left out; Sarah speaks with the OS's own.
+ */
 export function englishVoices(): SpeechSynthesisVoice[] {
   if (typeof window === "undefined" || !window.speechSynthesis) return [];
-  return window.speechSynthesis.getVoices().filter((v) => v.lang?.toLowerCase().startsWith("en"));
+  return window.speechSynthesis.getVoices().filter((v) => v.lang?.toLowerCase().startsWith("en") && v.localService);
 }
 
 export function savedVoiceName(): string | null {
@@ -54,7 +83,7 @@ export function saveVoiceName(name: string) {
 
 export function pickVoice(): SpeechSynthesisVoice | null {
   if (typeof window === "undefined" || !window.speechSynthesis) return null;
-  const voices = window.speechSynthesis.getVoices();
+  const voices = window.speechSynthesis.getVoices().filter((v) => v.localService);
   if (!voices.length) return null;
 
   // What the user picked wins, then a build-time pin, then the preference list.
@@ -67,8 +96,7 @@ export function pickVoice(): SpeechSynthesisVoice | null {
     const match = voices.find((v) => v.name === name);
     if (match) return match;
   }
-  // Anything English and local beats the remote default.
-  return voices.find((v) => v.lang?.startsWith("en") && v.localService) ?? voices.find((v) => v.lang?.startsWith("en")) ?? null;
+  return voices.find((v) => v.lang?.startsWith("en")) ?? null;
 }
 
 /**
@@ -83,9 +111,28 @@ export function useApexVoice(options: {
    * changes immediately rather than after a round trip.
    */
   onLocalCommand?: (text: string) => string | null | Promise<string | null>;
+  /** Open the mic as soon as the view mounts, without waiting for a press. */
+  autoListen?: boolean;
+  /**
+   * Carries out what a tool asked the screen to do (take a photo for Design).
+   * Returns the line Sarah says once it's done.
+   */
+  onClientAction?: (action: ClientAction) => Promise<ClientActionOutcome>;
 } = {}) {
   const speakEnabled = options.speak ?? true;
+  const autoListen = options.autoListen ?? true;
+  // Conversation mode: once the user is talking, the mic reopens after every
+  // reply until they press it off.
+  const conversationRef = useRef(autoListen);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  // The saved conversation comes back on every visit and device (lib/memory.ts).
+  useEffect(() => {
+    let live = true;
+    void fetch("/api/agent/history").then(r => (r.ok ? r.json() : null)).then((body: { messages?: ChatMessage[] } | null) => {
+      if (live && body?.messages?.length) setMessages(current => (current.length ? current : body.messages!));
+    }).catch(() => {});
+    return () => { live = false; };
+  }, []);
   const [state, setState] = useState<VoiceState>("idle");
   const [pendingActions, setPendingActions] = useState<PendingAction[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -94,22 +141,72 @@ export function useApexVoice(options: {
   const [spokenChars, setSpokenChars] = useState(0);
 
   const mountedRef = useRef(true);
-  const inputRef = useRef<VoiceRecognition | null>(null);
+  const inputRef = useRef<VoiceRecognition | CloudRecognition | null>(null);
   const [inputStatus, setInputStatus] = useState<InputStatus>("off");
   const [heardText, setHeardText] = useState("");
   const speechGenerationRef = useRef(0);
-  const sendRef = useRef<(text: string) => void>(() => {});
+  const sendRef = useRef<(text: string, photos?: ShownPhoto[], interrupt?: boolean) => void>(() => {});
+  // Each message sent is a turn; a reply that arrives after a newer turn began is dropped.
+  const turnRef = useRef(0);
+  // The user is talking over Sarah: she is paused, and this is what she was doing.
+  const heldRef = useRef(false);
+  const heldStateRef = useRef<VoiceState>("idle");
+  const spokenTextRef = useRef("");
+  // Another Sarah tab was used more recently, so it has the mic.
+  const cededRef = useRef(false);
+  // Photos attached and waiting for the next message, typed or spoken.
+  const [attached, setAttached] = useState<ShownPhoto[]>([]);
+  const attachedRef = useRef<ShownPhoto[]>([]);
+  attachedRef.current = attached;
+  const [attaching, setAttaching] = useState(0);
+  const attachPhoto = useCallback(async (source: File | Blob | string) => {
+    setAttaching(n => n + 1);
+    try {
+      const photo = await uploadPhoto(source);
+      setAttached(list => [...list, photo].slice(-4));
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Couldn't upload the picture.");
+    } finally { setAttaching(n => n - 1); }
+  }, []);
+  const removeAttached = useCallback((id: string) => setAttached(list => list.filter(p => p.id !== id)), []);
   const stateRef = useRef<VoiceState>("idle");
+  // Background music steps aside for the whole exchange — while the user talks,
+  // while Sarah thinks and speaks — and returns once neither has spoken for a
+  // few seconds. Only the music pauses; the mic stays open.
+  const musicTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // While the mic is open the music stays off: music reaching the mic was
+  // being heard as speech, and turned into requests nobody made.
+  const micOpenRef = useRef(false);
+  const holdMusic = useCallback(() => {
+    if (musicTimer.current) { clearTimeout(musicTimer.current); musicTimer.current = null; }
+    pauseMusic();
+  }, []);
+  const releaseMusic = useCallback(() => {
+    if (musicTimer.current) clearTimeout(musicTimer.current);
+    musicTimer.current = setTimeout(() => {
+      musicTimer.current = null;
+      if (stateRef.current !== "thinking" && stateRef.current !== "speaking" && (!micOpenRef.current || listeningMode())) playMusic();
+    }, MUSIC_RESUME_MS);
+  }, []);
   const setVoiceState = useCallback((value: VoiceState) => {
+    // While the user talks over her, Sarah stays "listening"; what she'd
+    // otherwise be doing is kept for when the interruption turns out to be nothing.
+    if (heldRef.current && (value === "thinking" || value === "speaking")) { heldStateRef.current = value; return; }
+    const wasBusy = stateRef.current === "thinking" || stateRef.current === "speaking";
     stateRef.current = value;
     setState(value);
-  }, []);
+    if (value === "thinking" || value === "speaking") holdMusic();
+    else if (wasBusy) releaseMusic();
+  }, [holdMusic, releaseMusic]);
   // The send loop reads history through a ref so a reply can't race a stale copy.
   const messagesRef = useRef<ChatMessage[]>([]);
   messagesRef.current = messages;
   // Read through a ref so a new handler doesn't rebuild the whole send loop.
   const localCommandRef = useRef(options.onLocalCommand);
   localCommandRef.current = options.onLocalCommand;
+  const clientActionRef = useRef(options.onClientAction);
+  clientActionRef.current = options.onClientAction;
 
   /**
    * The reply is revealed in step with the voice rather than dumped at once.
@@ -131,12 +228,25 @@ export function useApexVoice(options: {
     setSpokenChars(n);
   }, []);
 
+  /**
+   * While Sarah thinks or speaks, her own mic recording keeps listening so the
+   * user can cut in. The browser's recognizer would hear Sarah herself, so it
+   * stays off then, as before.
+   */
+  const listenWhileBusy = useCallback(() => {
+    const input = inputRef.current;
+    const visible = typeof document === "undefined" || document.visibilityState !== "hidden";
+    if (input instanceof CloudRecognition && conversationRef.current && (visible || !cededRef.current)) input.setMode("barge");
+    else input?.setMode(null);
+  }, []);
+
   const speak = useCallback(
     (text: string, onDone?: () => void) => {
-      inputRef.current?.setMode(null);
+      listenWhileBusy();
       const generation = ++speechGenerationRef.current;
       stopReveal();
       setSpokenText(text);
+      spokenTextRef.current = text;
 
       let finished = false;
       const finish = () => {
@@ -160,6 +270,7 @@ export function useApexVoice(options: {
           if (generation !== speechGenerationRef.current || hasAlignment) return;
           const tick = 60;
           revealTimer.current = setInterval(() => {
+            if (heldRef.current) return;
             const next = Math.min(revealedRef.current + (CHARS_PER_SEC * tick) / 1000, text.length);
             setRevealed(next);
             if (next >= text.length) stopReveal();
@@ -187,21 +298,65 @@ export function useApexVoice(options: {
           }
         },
       });
+      // The user is mid-interruption: this reply waits instead of talking over them.
+      if (heldRef.current) holdSpeech();
     },
-    [speakEnabled, stopReveal, setRevealed]
+    [speakEnabled, stopReveal, setRevealed, listenWhileBusy]
   );
 
+  const resumeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /**
+   * Whether this tab may listen. Sarah's own mic recording keeps working
+   * while you're on another tab, so she still hears you. Only one Sarah tab
+   * listens at a time, though (the one used last), so two don't answer at
+   * once. The browser's built-in recognizer runs in one tab only, so with it
+   * Sarah listens only while her tab is showing.
+   */
+  const mayListen = useCallback(() => {
+    if (typeof document === "undefined" || document.visibilityState !== "hidden") return true;
+    return inputRef.current instanceof CloudRecognition && !cededRef.current;
+  }, []);
+  /** In conversation mode, open the mic again. */
+  const resumeListening = useCallback((delay: number) => {
+    if (!conversationRef.current || !inputRef.current) return;
+    if (resumeTimer.current) clearTimeout(resumeTimer.current);
+    resumeTimer.current = setTimeout(() => {
+      resumeTimer.current = null;
+      if (!mountedRef.current || !conversationRef.current || stateRef.current !== "idle") return;
+      if (!mayListen()) return;
+      setHeardText("");
+      setVoiceState("listening");
+      inputRef.current?.setMode("command");
+    }, delay);
+  }, [setVoiceState, mayListen]);
+
+  /** A reply has finished; in conversation mode, hand the floor back to the user. */
+  const afterReply = useCallback(() => {
+    setVoiceState("idle");
+    // The mic is already open (barge mode); a short gap so it doesn't catch
+    // the very tail of Sarah's own voice.
+    resumeListening(150);
+  }, [setVoiceState, resumeListening]);
+
   const send = useCallback(
-    async (text: string) => {
-      const trimmed = text.trim();
-      if (!trimmed || stateRef.current === "thinking") return;
+    async (text: string, withPhotos?: ShownPhoto[], interrupt = false) => {
+      // Typing waits for the reply; speaking over Sarah replaces the request in flight.
+      if (stateRef.current === "thinking" && !interrupt) return;
+      // Attached photos go with this message, whether it was typed or spoken.
+      const photos = withPhotos ?? attachedRef.current;
+      const trimmed = text.trim() || (photos.length ? "Here's a photo — take a look." : "");
+      if (!trimmed) return;
+      if (!withPhotos && photos.length) { attachedRef.current = []; setAttached([]); }
+      const turn = ++turnRef.current;
+      const current = () => mountedRef.current && turn === turnRef.current;
+      heldRef.current = false;
       speechGenerationRef.current++;
       cancelSpeech();
       stopReveal();
-      inputRef.current?.setMode(null);
+      listenWhileBusy();
       setVoiceState("thinking");
       setHeardText(trimmed);
-      const next = [...messagesRef.current, { role: "user" as const, content: trimmed }];
+      const next: ChatMessage[] = [...messagesRef.current, { role: "user" as const, content: trimmed, ...(photos.length ? { photos } : {}) }];
       messagesRef.current = next;
       setMessages(next);
       setError(null);
@@ -210,17 +365,22 @@ export function useApexVoice(options: {
       // async — opening the camera and looking through it takes a moment.
       let localReply: string | null | undefined;
       try {
-        localReply = await localCommandRef.current?.(trimmed);
+        // Music on/off is answered at once, without a round trip to the agent.
+        const music = musicCommand(trimmed);
+        if (music === "off") { musicOff(); localReply = "Music paused."; }
+        else if (music === "on") { musicOn(); localReply = "Background music on."; }
+        else if (music === "listen") { sendMusicCommand("listen"); localReply = "Playing music."; }
+        else if (music === "next") { sendMusicCommand("next"); localReply = "Next song."; }
+        // With a photo attached, it goes to Sarah to look at, not a screen command.
+        else if (!photos.length) localReply = await localCommandRef.current?.(trimmed);
       } catch (err) {
         localReply = err instanceof Error ? err.message : "That didn't work.";
       }
-      if (!mountedRef.current) return;
+      if (!current()) return;
       if (localReply) {
         setMessages((m) => [...m, { role: "assistant", content: localReply }]);
         setVoiceState("speaking");
-        speak(localReply, () => {
-          setVoiceState("idle");
-        });
+        speak(localReply, afterReply);
         return;
       }
 
@@ -228,24 +388,26 @@ export function useApexVoice(options: {
 
       // Only the request itself is guarded here. Rendering and speaking the
       // reply must not be able to masquerade as a network failure.
-      let data: { reply?: string; error?: string; pendingActions?: PendingAction[] };
+      let data: { reply?: string; error?: string; pendingActions?: PendingAction[]; clientActions?: ClientAction[] };
       try {
         const res = await fetch("/api/agent/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ messages: next }),
+          // Where and when the user is, so "where am I" or "what's the weather" just work.
+          // Photos travel by id; the server has them.
+          body: JSON.stringify({ messages: next.map(m => ({ role: m.role, content: m.content, ...(m.photos?.length ? { photoIds: m.photos.map(p => p.id) } : {}) })), context: await chatContext() }),
         });
         data = await res.json();
       } catch {
-        if (!mountedRef.current) return;
+        if (!current()) return;
         const message = "I couldn't reach the server. Is it running?";
         setMessages((m) => [...m, { role: "assistant", content: message }]);
         setError(message);
-        setVoiceState("idle");
+        afterReply();
         return;
       }
 
-      if (!mountedRef.current) return;
+      if (!current()) return;
       const reply: string = data.reply || data.error || "Something went wrong.";
       if (data.error) setError(data.error);
 
@@ -254,17 +416,55 @@ export function useApexVoice(options: {
         setPendingActions((prev) => [...(data.pendingActions ?? []), ...prev]);
       }
 
+      // The agent asked the screen to do something (take a photo for Design):
+      // do it now, then say how it went instead of the "on it" line.
+      if (Array.isArray(data.clientActions) && data.clientActions.length) {
+        const outcomes: string[] = [];
+        let followUp: { text: string; photos: ShownPhoto[] } | null = null;
+        for (const action of data.clientActions) {
+          const handler = clientActionRef.current;
+          let outcome: ClientActionOutcome = null;
+          try {
+            // Pictures already saved (from Drive): shown here and sent on, on any screen.
+            if (action.type === "app_music") {
+              sendMusicCommand(action.action === "pause" ? "off" : action.action === "next" ? "next" : "listen", action.query);
+              outcome = action.action === "pause" ? "Music paused." : action.action === "next" ? "Next song." : "Playing music.";
+            }
+            else if (action.type === "show_saved_photos") outcome = { followUp: { text: action.request, photos: action.photos.map(p => ({ id: p.id, src: p.url })) } };
+            else outcome = handler ? await handler(action) : "Pictures and the camera work on the deck — open the home screen and ask me there.";
+          } catch (err) {
+            outcome = err instanceof Error ? err.message : "That didn't work.";
+          }
+          if (!current()) return;
+          if (typeof outcome === "string") outcomes.push(outcome);
+          else if (outcome) { if (outcome.say) outcomes.push(outcome.say); followUp = outcome.followUp; }
+        }
+        // A photo was taken to look at: send it on with the request, as the next message.
+        if (followUp) {
+          if (outcomes.length) setMessages((m) => [...m, { role: "assistant", content: outcomes.join(" ") }]);
+          setVoiceState("idle");
+          const f = followUp;
+          setTimeout(() => sendRef.current(f.text, f.photos), 0);
+          return;
+        }
+        const said = outcomes.join(" ") || reply;
+        setMessages((m) => [...m, { role: "assistant", content: said }]);
+        setVoiceState("speaking");
+        speak(said, afterReply);
+        return;
+      }
+
       setVoiceState("speaking");
-      speak(reply, () => {
-        setVoiceState("idle");
-      });
+      speak(reply, afterReply);
     },
-    [speak, setVoiceState, stopReveal]
+    [speak, setVoiceState, stopReveal, afterReply, listenWhileBusy]
   );
 
   sendRef.current = send;
 
   const stopListening = useCallback(() => {
+    conversationRef.current = false;
+    if (inputRef.current) inputRef.current.keepAlive = false;
     inputRef.current?.setMode(null);
     if (stateRef.current === "listening") setVoiceState("idle");
   }, [setVoiceState]);
@@ -275,14 +475,18 @@ export function useApexVoice(options: {
       return;
     }
     // Invalidate speech completion before canceling so it cannot reopen the mic.
+    heldRef.current = false;
     speechGenerationRef.current++;
     cancelSpeech(); stopReveal();
+    conversationRef.current = true;
+    inputRef.current.keepAlive = true;
     setError(null); setHeardText("");
     setVoiceState("listening");
     inputRef.current.setMode("command");
   }, [setVoiceState, stopReveal]);
 
   const stopSpeaking = useCallback(() => {
+    heldRef.current = false;
     speechGenerationRef.current++;
     cancelSpeech(); stopReveal();
     if (stateRef.current === "speaking") setVoiceState("idle");
@@ -328,12 +532,12 @@ export function useApexVoice(options: {
             : "Okay, I won't do that.";
         setMessages((m) => [...m, { role: "assistant", content: summary }]);
         setVoiceState("speaking");
-        speak(summary, () => setVoiceState("idle"));
+        speak(summary, afterReply);
       } catch {
         setMessages((m) => [...m, { role: "assistant", content: "Couldn't reach the server to confirm that." }]);
       }
     },
-    [speak]
+    [speak, afterReply]
   );
 
   // Chrome populates getVoices() asynchronously and returns an empty list on
@@ -343,32 +547,139 @@ export function useApexVoice(options: {
     window.speechSynthesis.getVoices();
     const onVoices = () => window.speechSynthesis.getVoices();
     window.speechSynthesis.addEventListener?.("voiceschanged", onVoices);
-    return () => window.speechSynthesis.removeEventListener?.("voiceschanged", onVoices);
+    // A macOS voice is slow to say its first word while it loads. On the first
+    // click (Chrome won't speak before one), say something muted to load it.
+    const warm = () => {
+      window.removeEventListener("pointerdown", warm);
+      window.removeEventListener("keydown", warm);
+      if (window.speechSynthesis.speaking || window.speechSynthesis.pending) return;
+      const utter = new SpeechSynthesisUtterance("Hi.");
+      const voice = pickVoice();
+      if (voice) { utter.voice = voice; utter.lang = voice.lang; }
+      utter.volume = 0;
+      window.speechSynthesis.speak(utter);
+    };
+    window.addEventListener("pointerdown", warm);
+    window.addEventListener("keydown", warm);
+    return () => {
+      window.speechSynthesis.removeEventListener?.("voiceschanged", onVoices);
+      window.removeEventListener("pointerdown", warm);
+      window.removeEventListener("keydown", warm);
+    };
   }, []);
 
-  // The recognizer starts only through an explicit microphone button press.
+  // With autoListen the conversation opens on mount; otherwise the mic waits
+  // for a press. Either way, pressing it off ends conversation mode.
   useEffect(() => {
     mountedRef.current = true;
     const Ctor = getRecognitionCtor();
-    if (Ctor) inputRef.current = new VoiceRecognition(Ctor, {
-      status: status => {
+    const callbacks = {
+      status: (status: InputStatus) => {
         setInputStatus(status);
+        micOpenRef.current = status !== "off";
+        // Music asked for to listen to keeps playing while the mic waits.
+        if (micOpenRef.current && !listeningMode()) holdMusic();
+        else if (stateRef.current !== "thinking" && stateRef.current !== "speaking") releaseMusic();
         if (status === "off" && stateRef.current === "listening") setVoiceState("idle");
         if (status === "listening" && stateRef.current === "idle") setVoiceState("listening");
       },
-      interim: setHeardText,
-      transcript: text => { void sendRef.current(text); },
-      error: message => {
+      interim: (text: string) => {
+        setHeardText(text);
+        // Words arriving mean the user is talking; an empty result was noise.
+        if (text) holdMusic();
+        else if (stateRef.current !== "thinking" && stateRef.current !== "speaking") releaseMusic();
+      },
+      speech: holdMusic,
+      // The user started talking over Sarah: she stops at once and listens.
+      bargeIn: () => {
+        if (heldRef.current) return;
+        heldStateRef.current = stateRef.current;
+        holdSpeech();
+        setVoiceState("listening");
+        heldRef.current = true;
+        setHeardText("");
+      },
+      // It was nothing: she carries on where she paused.
+      bargeOff: () => {
+        if (!heldRef.current) return;
+        heldRef.current = false;
+        setVoiceState(heldStateRef.current);
+        releaseSpeech();
+        // Still busy, so keep listening for a real interruption.
+        if (stateRef.current === "thinking" || stateRef.current === "speaking") listenWhileBusy();
+      },
+      // One lost turn: say so, keep listening.
+      warning: (message: string) => setError(message),
+      transcript: (text: string) => {
+        if (heldRef.current) {
+          // Sarah's own words came back through the speakers: not an interruption.
+          if (text && heldStateRef.current === "speaking" && soundsLikeEcho(text, spokenTextRef.current)) {
+            heldRef.current = false;
+            setVoiceState(heldStateRef.current);
+            releaseSpeech();
+            if (stateRef.current === "thinking" || stateRef.current === "speaking") listenWhileBusy();
+            return;
+          }
+          // Just "Sarah": stop everything and listen for what comes next.
+          if (!text) {
+            heldRef.current = false;
+            turnRef.current++;
+            speechGenerationRef.current++;
+            cancelSpeech(); stopReveal();
+            setVoiceState("idle");
+            resumeListening(0);
+            return;
+          }
+        }
+        void sendRef.current(text, undefined, true);
+      },
+      error: (message: string) => {
+        // A blocked or broken mic must not be retried after every reply.
+        conversationRef.current = false;
+        if (inputRef.current) inputRef.current.keepAlive = false;
         setError(message); setVoiceState("idle");
       },
-    });
+    };
+    // Server transcription hears any language; the browser's hears only one.
+    if (CloudRecognition.supported()) inputRef.current = new CloudRecognition(callbacks);
+    else if (Ctor) inputRef.current = new VoiceRecognition(Ctor, callbacks);
+    if (inputRef.current && conversationRef.current) {
+      inputRef.current.keepAlive = true;
+      resumeListening(0);
+    }
+    const releaseMic = () => {
+      inputRef.current?.setMode(null);
+      if (stateRef.current === "listening") setVoiceState("idle");
+    };
+    // The Sarah tab you look at takes the mic; the others let it go.
+    let channel: BroadcastChannel | null = null;
+    try { channel = new BroadcastChannel("sarah-mic"); } catch { /* old browser: one tab assumed */ }
+    const claim = () => { cededRef.current = false; try { channel?.postMessage("claim"); } catch { /* closed */ } };
+    if (channel) channel.onmessage = e => {
+      if (e.data !== "claim" || document.visibilityState !== "hidden") return;
+      cededRef.current = true;
+      releaseMic();
+    };
+    if (typeof document !== "undefined" && document.visibilityState !== "hidden") claim();
+    // Hidden: keep listening if this mic allows it, else hand it back. Shown: take it.
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") { if (!mayListen()) releaseMic(); }
+      else { claim(); resumeListening(0); }
+    };
+    if (typeof document !== "undefined") document.addEventListener("visibilitychange", onVisibility);
     return () => {
       mountedRef.current = false;
+      channel?.close();
+      if (typeof document !== "undefined") document.removeEventListener("visibilitychange", onVisibility);
+      if (resumeTimer.current) clearTimeout(resumeTimer.current);
       speechGenerationRef.current++;
       inputRef.current?.dispose(); inputRef.current = null;
+      // Never leave the music paused behind a view that has gone.
+      if (musicTimer.current) { clearTimeout(musicTimer.current); musicTimer.current = null; }
+      playMusic();
       stopReveal(); cancelSpeech();
     };
-  }, [stopReveal, setVoiceState]);
+  }, [stopReveal, setVoiceState, resumeListening, holdMusic, releaseMusic, listenWhileBusy]);
 
   return {
     messages,
@@ -377,12 +688,19 @@ export function useApexVoice(options: {
     error,
     pendingActions,
     send,
+    /** Photos waiting to go with the next message; attach adds one (a file, or a data URL from the camera). */
+    attached,
+    attaching: attaching > 0,
+    attachPhoto,
+    removeAttached,
     toggle,
     startListening,
     stopListening,
     refreshPending,
     respondToAction,
     inputStatus,
+    /** Conversation mode is on: the mic reopens after each reply unless pressed off. */
+    handsFree: conversationRef.current,
     heardText,
     stopSpeaking,
     /** How far the voice has got through the reply, in characters. */

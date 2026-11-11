@@ -1,7 +1,7 @@
 import { createSdkMcpServer, query, tool } from "@anthropic-ai/claude-agent-sdk";
 import { toolDefinitions, executeTool } from "./tools";
 import { toShape, type JsonSchema } from "./jsonSchemaToZod";
-import type { PendingAction } from "./types";
+import type { ClientAction, PendingAction } from "./types";
 
 /**
  * The Claude Code backend.
@@ -26,7 +26,7 @@ import type { PendingAction } from "./types";
 const SERVER_NAME = "imex";
 
 /**
- * Claude Code ships with file and shell tools. Nova is an assistant for
+ * Claude Code ships with file and shell tools. Sarah is an assistant for
  * accounts and reports, not a coding agent, and its working directory is the
  * user's own machine — so the built-ins are blocked outright and only the
  * connectors are left. `allowedTools` alone would not do this: it auto-approves
@@ -52,6 +52,7 @@ const BLOCKED_BUILTINS = [
 export type ClaudeCodeRun = {
   reply: string;
   pendingActions: PendingAction[];
+  clientActions: ClientAction[];
   /** The SDK's own estimate for the turn. Zero on a subscription login. */
   costUsd: number;
 };
@@ -60,7 +61,7 @@ export type ClaudeCodeRun = {
 function renderPrompt(messages: { role: "user" | "assistant"; content: string }[]): string {
   if (messages.length === 1) return messages[0].content;
   return messages
-    .map((m) => `${m.role === "user" ? "Haider" : "Nova"}: ${m.content}`)
+    .map((m) => `${m.role === "user" ? "Haider" : "Sarah"}: ${m.content}`)
     .join("\n\n");
 }
 
@@ -74,6 +75,7 @@ export async function runViaClaudeCode({
   maxTurns?: number;
 }): Promise<ClaudeCodeRun> {
   const pendingActions: PendingAction[] = [];
+  const clientActions: ClientAction[] = [];
 
   // The same connectors the API path uses, re-presented as MCP tools. The
   // schemas are converted rather than restated, so tools.ts stays the one
@@ -92,6 +94,7 @@ export async function runViaClaudeCode({
           // A proposed post or email is queued for approval, not sent; the
           // route returns these so the UI can show the confirmation card.
           if (result.pendingAction) pendingActions.push(result.pendingAction);
+          if (result.clientAction) clientActions.push(result.clientAction);
           return { content: [{ type: "text" as const, text: result.text }] };
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
@@ -116,7 +119,7 @@ export async function runViaClaudeCode({
       mcpServers: { [SERVER_NAME]: server },
       allowedTools: toolDefinitions.map((d) => `mcp__${SERVER_NAME}__${d.name}`),
       disallowedTools: BLOCKED_BUILTINS,
-      // Don't inherit the developer's own CLAUDE.md, skills or settings — Nova
+      // Don't inherit the developer's own CLAUDE.md, skills or settings — Sarah
       // should behave the same whoever's machine it runs on.
       settingSources: [],
       maxTurns,
@@ -136,7 +139,7 @@ export async function runViaClaudeCode({
     }
   }
 
-  return { reply: reply.trim() || "(no response)", pendingActions, costUsd };
+  return { reply: reply.trim() || "(no response)", pendingActions, clientActions, costUsd };
 }
 
 /** Turns a Claude Code failure into something actionable. */

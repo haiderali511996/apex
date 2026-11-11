@@ -11,6 +11,7 @@ export function useCamera() {
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const facingRef = useRef<"user" | "environment">("user");
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
   const stop = useCallback(() => {
@@ -20,16 +21,26 @@ export function useCamera() {
     setOpen(false);
   }, []);
 
-  /** Opens the camera and resolves once it is actually producing frames. */
-  const start = useCallback(async (): Promise<boolean> => {
+  /**
+   * Opens the camera and resolves once it is actually producing frames.
+   * "environment" is a phone's back camera, for pointing at a screen or paper;
+   * a laptop has one camera and uses it either way.
+   */
+  const start = useCallback(async (facing: "user" | "environment" = "user"): Promise<boolean> => {
     setError(null);
+    // Already open on the other side of a phone: switch.
+    if (streamRef.current && facingRef.current !== facing) {
+      streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+    }
+    facingRef.current = facing;
     if (!navigator.mediaDevices?.getUserMedia) {
       setError("This browser can't open a camera.");
       return false;
     }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" },
+        video: { width: { ideal: 1920 }, height: { ideal: 1080 }, facingMode: { ideal: facing } },
         audio: false,
       });
       streamRef.current = stream;
@@ -58,10 +69,12 @@ export function useCamera() {
       const name = err instanceof Error ? err.name : "";
       setError(
         name === "NotAllowedError"
-          ? "Camera access was blocked. Allow it in your browser's site settings and ask again."
+          ? "Camera access was blocked. Allow it for this site in Chrome (the camera icon in the address bar), and for Chrome in System Settings → Privacy & Security → Camera, then try again."
           : name === "NotFoundError"
           ? "No camera found on this machine."
-          : "Couldn't open the camera."
+          : name === "NotReadableError"
+          ? "The camera is busy or macOS is blocking it. Close other apps using it (FaceTime, Zoom, Photo Booth), check System Settings → Privacy & Security → Camera for Chrome, then try again."
+          : `Couldn't open the camera${name ? ` (${name})` : ""}.`
       );
       setOpen(false);
       return false;
@@ -69,7 +82,7 @@ export function useCamera() {
   }, []);
 
   /** Grabs the current frame as a JPEG data URL, or null if nothing is live. */
-  const capture = useCallback((maxWidth = 720): string | null => {
+  const capture = useCallback((maxWidth = 720, quality = 0.82): string | null => {
     const video = videoRef.current;
     if (!video || !video.videoWidth) return null;
     const scale = Math.min(1, maxWidth / video.videoWidth);
@@ -80,8 +93,8 @@ export function useCamera() {
     if (!ctx) return null;
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     // JPEG keeps the payload small enough to post comfortably.
-    return canvas.toDataURL("image/jpeg", 0.82);
+    return canvas.toDataURL("image/jpeg", quality);
   }, []);
 
-  return { open, error, start, stop, capture, videoRef, stream: streamRef };
+  return { open, error, start, stop, capture, videoRef, stream: streamRef, facing: facingRef };
 }

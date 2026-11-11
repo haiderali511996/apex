@@ -1,6 +1,6 @@
 /**
  * The specialists that need no external account — they're Claude working
- * under a focused brief. Keys match the ROSTER in components/ApexWorld.tsx
+ * under a focused brief. Keys match the ROSTER in components/sarah/agents.tsx
  * so every node in the graph resolves to something real.
  */
 export const SPECIALISTS: Record<string, { name: string; brief: string }> = {
@@ -48,11 +48,6 @@ export const SPECIALISTS: Record<string, { name: string; brief: string }> = {
     name: "Design",
     brief:
       "You are the visual workshop. Advise on composition, hierarchy, colour, and platform-specific sizing. You cannot edit images directly — describe precisely what should change and why, so it can be executed.",
-  },
-  developer: {
-    name: "Developer",
-    brief:
-      "You keep Nova's build log. Recap what shipped over a day, week, or month in plain language, and note what's still open.",
   },
 };
 

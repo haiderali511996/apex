@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { arrivalTime, ASSEMBLY_SECONDS, clamp01, PORTRAIT_FRAME, smooth } from "./assembly";
+import { drawTurnedPortrait } from "./headPose";
 
 type Props = {
   image: HTMLImageElement;
@@ -76,7 +77,7 @@ export default function ParticleAssembly(props: Props) {
       ctx.clearRect(0, 0, width, height);
       ctx.fillStyle = "#020d18"; ctx.fillRect(0, 0, width, height);
       if (p >= 1) {
-        ctx.drawImage(texture, 0, 0, width, height);
+        drawTurnedPortrait(ctx, texture, width, height);
       } else {
         // A soft moving front follows the particles. Never swap sprite-sheet tiles.
         for (let i = 0; i < arrivals.length; i++) maskPixels.data[i * 4 + 3] = smooth((p - arrivals[i] - .025) / .125) * 255;

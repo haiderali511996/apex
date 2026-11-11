@@ -1,4 +1,6 @@
+import { requireUser } from "@/lib/auth";
 import { NextResponse } from "next/server";
+import { enterUser } from "@/lib/credentials";
 
 /**
  * Weather for the *visitor's* location.
@@ -32,6 +34,10 @@ async function cityFromCoords(lat: string, lon: string): Promise<string> {
 }
 
 export async function GET(request: Request) {
+  const guard = await requireUser();
+  if ("response" in guard) return guard.response;
+  // This request runs on this account's own keys from here on.
+  enterUser(guard.user.id, guard.user.role === "owner");
   const { searchParams } = new URL(request.url);
   const h = request.headers;
 

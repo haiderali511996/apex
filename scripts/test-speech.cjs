@@ -11,6 +11,7 @@ function load(file, globals) {
 (async () => {
   const speech = load('lib/agent/geminiSpeech.ts', {
     process: { env: { GEMINI_API_KEY: 'test' } },
+    require: name => { if (name === '@/lib/credentials') return { cred: () => 'test' }; throw Error(name); },
     fetch: async (_, options) => {
       const request = JSON.parse(options.body);
       assert.equal(request.generationConfig.responseModalities[0], 'AUDIO');
@@ -33,17 +34,32 @@ function load(file, globals) {
   assert.equal(motion.sampleSpeechMotion('a mo', .3, alignment).open, 0, 'pauses close the lips');
   assert(motion.sampleSpeechMotion('a mo', .5, alignment).open < .05, 'bilabial sounds close the lips');
   assert(motion.sampleSpeechMotion('a mo', .7, alignment).round > .8, 'O rounds the lips');
+  assert.equal(motion.speechAudioLevel(new Float32Array(480)), 0, 'silence closes the mouth');
+  const quiet = motion.speechAudioLevel(new Float32Array(480).fill(.02));
+  const loud = motion.speechAudioLevel(new Float32Array(480).fill(.1));
+  assert(loud > quiet && quiet > 0, 'opening follows the actual audio energy');
+  motion.updateAudioSpeechMotion(loud);
+  assert(motion.readSpeechMotion().open > .8);
+  motion.updateAudioSpeechMotion(0);
+  assert.equal(motion.readSpeechMotion().open, 0, 'audio pauses close the mouth regardless of text');
   motion.updateSpeechMotion('a', .1, alignment);
   assert(motion.readSpeechMotion().active);
   motion.resetSpeechMotion();
   assert.equal(motion.readSpeechMotion().open, 0);
 
+  const lang = load('lib/speechLanguage.ts', {});
+  assert.equal(lang.speechLang('Sure. Aap ka kaam ho gaya hai. Anything else?'), 'ur');
+  assert.equal(lang.speechLang('The meeting is at 3 pm. I added it to your calendar.'), 'en');
+  // Phones only play from an element unlocked by a tap, so one element is reused (lib/audioUnlock.ts).
+  const unlockStub = (Ctor) => { let el; return { voiceElement: () => (el ??= new Ctor()), releaseVoiceElement: e => e.pause() }; };
+  const modules = (Ctor) => { const unlock = unlockStub(Ctor); return name => name === './speechMotion' ? motion : name === './audioUnlock' ? unlock : name === './speechLanguage' ? lang : (() => { throw Error(name); })(); };
+  const sentLangs = [];
   const client = load('lib/neuralVoice.ts', {
     AbortController, Blob, atob, Uint8Array,
-    require: name => { if (name === "./speechMotion") return motion; throw Error(name); },
+    get require() { return modules(this.Audio); },
     URL: { createObjectURL: () => 'blob:test', revokeObjectURL: () => {} },
-    Audio: class { constructor() { element = this; } play() { return Promise.resolve(); } pause() {} },
-    fetch: async () => ({ ok: true, status: 200, json: async () => ({ audioBase64: 'AAAA', mimeType: 'audio/wav', alignment: null }) }),
+    Audio: class { constructor() { element = this; } play() { return Promise.resolve(); } pause() {} removeAttribute() {} load() {} },
+    fetch: async (_, options) => ({ ok: true, ...(sentLangs.push(JSON.parse(options.body).lang), {}), status: 200, json: async () => ({ audioBase64: 'AAAA', mimeType: 'audio/wav', alignment: null }) }),
     setTimeout: fn => { timers.set(++id, fn); return id; }, clearTimeout: n => timers.delete(n),
     cancelAnimationFrame: () => {}, requestAnimationFrame: () => 1,
   });
@@ -56,15 +72,16 @@ function load(file, globals) {
   await new Promise(resolve => setImmediate(resolve));
   [...timers.values()].forEach(fn => fn());
   assert.equal(await stalled, false, 'stalled audio must fall back instead of hanging');
+  assert(sentLangs.length && sentLangs.every(l => l === 'en'), 'every piece is sent with the reply\'s one language');
   // A canceled request can finish parsing after a new reply has started.
   // It must never create an audio element for the stale reply.
   let resolvePayload;
   let created = 0;
   const racingClient = load('lib/neuralVoice.ts', {
     AbortController, Blob, atob, Uint8Array,
-    require: () => motion,
+    get require() { return modules(this.Audio); },
     URL: { createObjectURL: () => 'blob:test', revokeObjectURL: () => {} },
-    Audio: class { constructor() { created++; } play() { return Promise.resolve(); } pause() {} },
+    Audio: class { constructor() { created++; } play() { return Promise.resolve(); } pause() {} removeAttribute() {} load() {} },
     fetch: async () => ({ ok: true, status: 200, json: () => new Promise(resolve => { resolvePayload = resolve; }) }),
     setTimeout, clearTimeout, cancelAnimationFrame: () => {}, requestAnimationFrame: () => 1,
   });
@@ -74,5 +91,5 @@ function load(file, globals) {
   resolvePayload({ audioBase64: 'AAAA', mimeType: 'audio/wav', alignment: null });
   assert.equal(await obsolete, true);
   assert.equal(created, 0, 'a canceled response must never start late playback');
-  console.log('PASS: Gemini speech request, WAV encoding, cancellation, stalled playback timeout, timed mouth shapes');
+  console.log('PASS: Gemini speech request, WAV encoding, cancellation, stalled playback timeout, timed mouth shapes, one voice per reply');
 })().catch(error => { console.error(error); process.exit(1); });

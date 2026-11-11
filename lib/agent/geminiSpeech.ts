@@ -1,3 +1,4 @@
+import { cred } from "@/lib/credentials";
 /** Gemini TTS returns raw 24 kHz, mono PCM; browsers need a WAV container. */
 export function pcmToWav(pcm: Buffer, sampleRate = 24000): Buffer {
   const header = Buffer.alloc(44);
@@ -11,7 +12,7 @@ export function pcmToWav(pcm: Buffer, sampleRate = 24000): Buffer {
 }
 
 export async function generateGeminiSpeech(text: string) {
-  const key = process.env.GEMINI_API_KEY?.trim();
+  const key = cred("GEMINI_API_KEY")?.trim();
   if (!key) throw new Error('GEMINI_API_KEY is missing.');
   const model = process.env.GEMINI_TTS_MODEL?.trim() || 'gemini-3.1-flash-tts-preview';
   const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {

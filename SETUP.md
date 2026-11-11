@@ -1,6 +1,6 @@
 # Free conversation setup (Gemini)
 
-Nova now defaults to Gemini for chat, connected-account tools, specialist calls,
+Sarah now defaults to Gemini for chat, connected-account tools, specialist calls,
 and webcam descriptions. No request in this mode falls back to Claude.
 
 1. Create a key at https://aistudio.google.com/apikey using a free-tier project.
@@ -73,11 +73,11 @@ Two limits worth knowing:
   option B there.
 - **It's for you, not your users.** Anthropic does not permit offering
   claude.ai login or subscription rate limits to other people through your
-  own product without prior approval. Running Nova yourself against your own
+  own product without prior approval. Running Sarah yourself against your own
   login is just you using your own Claude Code; shipping it to other users
   on your login is not.
 
-Nova gets only its own connector tools under this backend. Claude Code's
+Sarah gets only its own connector tools under this backend. Claude Code's
 file and shell tools (`Read`, `Write`, `Edit`, `Bash`, `Glob`, `Grep`, …)
 are blocked outright — it's an assistant for your accounts, and it runs on
 your machine, so it has no business reading your disk.
@@ -96,7 +96,7 @@ your machine, so it has no business reading your disk.
 
 ## 1b. Voice (optional)
 
-Left alone, Nova speaks through the browser's `speechSynthesis`, which plays
+Left alone, Sarah speaks through the browser's `speechSynthesis`, which plays
 whichever voices your operating system ships. On macOS the built-in compact
 voices sound robotic, and no setting changes that — the fix is to stop using
 them.

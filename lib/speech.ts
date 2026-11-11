@@ -18,7 +18,7 @@
  */
 
 import { updateSpeechMotion, resetSpeechMotion } from "./speechMotion";
-import { speakNeural, cancelNeuralSpeech, neuralVoiceRuledOut, neuralVoiceReason } from "./neuralVoice";
+import { speakNeural, cancelNeuralSpeech, holdNeuralSpeech, releaseNeuralSpeech, neuralVoiceRuledOut, neuralVoiceReason, neuralVoiceWorked } from "./neuralVoice";
 
 // (3) — a module-level reference keeps the utterance alive while it speaks.
 let active: SpeechSynthesisUtterance | null = null;
@@ -85,6 +85,20 @@ export function cancelSpeech() {
   active = null;
 }
 
+/** Pauses Sarah mid-word while the user talks over her. */
+export function holdSpeech() {
+  holdNeuralSpeech();
+  if (!synthAvailable()) return;
+  try { if (window.speechSynthesis.speaking) window.speechSynthesis.pause(); } catch { /* nothing playing */ }
+}
+
+/** Carries on from where holdSpeech paused, when the interruption was nothing. */
+export function releaseSpeech() {
+  releaseNeuralSpeech();
+  if (!synthAvailable()) return;
+  try { if (window.speechSynthesis.paused) window.speechSynthesis.resume(); } catch { /* nothing paused */ }
+}
+
 /**
  * Speaks, preferring the neural voice.
  *
@@ -102,6 +116,10 @@ export function speakText(
   const version = speechVersion;
   if (neuralVoiceRuledOut()) {
     const reason = neuralVoiceReason();
+    if (neuralVoiceWorked()) {
+      handlers.onError?.(reason || "The voice service stopped working.");
+      return;
+    }
     if (reason) handlers.onWarning?.(`${reason} Using the system voice for this reply.`);
     speakViaSynth(text, voice, handlers);
     return;
@@ -114,6 +132,12 @@ export function speakText(
     // voice didn't run — "check your volume" sends the user hunting for a
     // problem that isn't there.
     const why = neuralVoiceReason();
+    // Once Sarah's own voice has been heard, never switch to a different-
+    // sounding system voice: show the reply as text instead.
+    if (neuralVoiceWorked()) {
+      handlers.onError?.(why || "The voice couldn't play this reply.");
+      return;
+    }
     if (why) handlers.onWarning?.(`${why} Using the system voice for this reply.`);
     speakViaSynth(text, voice, {
       ...handlers,
@@ -162,25 +186,67 @@ function speakViaSynth(
       utter.volume = 1;
 
       let started = false;
+      let anchor = 0, anchorTime = 0, wordEnd = text.length;
+      let charactersPerSecond = 13;
+      let previousBoundary: { index: number; time: number } | null = null;
+      const sample = () => {
+        if (version !== speechVersion || active !== utter) return;
+        const elapsed = (performance.now() - anchorTime) / 1000;
+        // Stay within the spoken word until the next real boundary arrives.
+        const position = Math.min(wordEnd, anchor + elapsed * charactersPerSecond);
+        updateSpeechMotion(text, position / 13, null);
+      };
       utter.onstart = () => {
+        if (version !== speechVersion || active !== utter) return;
         started = true;
         stopMotion();
-        const began = Date.now();
-        motionTimer = setInterval(() => updateSpeechMotion(text, (Date.now() - began) / 1000, null), 33);
+        anchorTime = performance.now();
+        sample();
+        motionTimer = setInterval(sample, 16);
         handlers.onStart?.();
       };
-      utter.onboundary = (e) => handlers.onBoundary?.(e.charIndex, e.charLength ?? 0);
+      utter.onboundary = (e) => {
+        if (version !== speechVersion || active !== utter) return;
+        if (e.name === "word" || !e.name) {
+          const now = performance.now();
+          if (previousBoundary && e.charIndex > previousBoundary.index) {
+            const seconds = (now - previousBoundary.time) / 1000;
+            if (seconds > .02) charactersPerSecond = Math.max(5, Math.min(30, (e.charIndex - previousBoundary.index) / seconds));
+          }
+          anchor = e.charIndex;
+          anchorTime = now;
+          const length = e.charLength || text.slice(anchor).match(/^\S+/)?.[0].length || 1;
+          wordEnd = Math.min(text.length, anchor + length);
+          previousBoundary = { index: anchor, time: now };
+          sample();
+        }
+        handlers.onBoundary?.(e.charIndex, e.charLength ?? 0);
+      };
+      utter.onpause = () => {
+        if (version === speechVersion && active === utter) stopMotion();
+      };
+      utter.onresume = () => {
+        if (version !== speechVersion || active !== utter) return;
+        anchorTime = performance.now();
+        if (motionTimer) clearInterval(motionTimer);
+        motionTimer = setInterval(sample, 16);
+      };
       utter.onend = () => {
+        if (version !== speechVersion || active !== utter) return;
         stopMotion();
         active = null;
         handlers.onEnd?.();
       };
       utter.onerror = (e) => {
+        if (version !== speechVersion || active !== utter) return;
         stopMotion();
         active = null;
         const reason = (e as SpeechSynthesisErrorEvent).error || "unknown";
         // "interrupted"/"canceled" are ordinary — we stopped it on purpose.
         if (reason === "interrupted" || reason === "canceled") handlers.onEnd?.();
+        // Chrome refuses speech on a page nobody has clicked yet; with the mic
+        // opening on its own, that is easy to hit.
+        else if (reason === "not-allowed") handlers.onError?.("Chrome won't speak until you click the page once. Click anywhere and Sarah will talk from then on.");
         else handlers.onError?.(reason);
       };
 
@@ -197,7 +263,8 @@ function speakViaSynth(
 
       // `onstart` is the only trustworthy signal that audio began — Chrome
       // sets speaking = true even when the named voice produces nothing, so
-      // that flag is deliberately not consulted here.
+      // that flag is deliberately not consulted here. The wait is generous:
+      // a macOS voice's first utterance takes ~2s while the voice loads.
       setTimeout(() => {
         if (started || active !== utter || version !== speechVersion) return;
 
@@ -209,8 +276,14 @@ function speakViaSynth(
           speakViaSynth(text, voice, handlers, true);
           return;
         }
+        // Still "speaking" with nothing started is Chrome's synth wedged, which
+        // only a browser restart clears — the volume is not the problem.
+        if (synth.speaking || synth.pending) {
+          handlers.onError?.("Chrome's speech engine is stuck. Quit Chrome completely (⌘Q) and reopen it.");
+          return;
+        }
         handlers.onError?.("silent");
-      }, 1400);
+      }, 4000);
     } catch (err) {
       handlers.onError?.(err instanceof Error ? err.message : String(err));
     }

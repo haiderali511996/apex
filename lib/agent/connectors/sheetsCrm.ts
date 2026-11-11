@@ -1,13 +1,14 @@
 import { google } from "googleapis";
 import type { ConnectorStatus, Report } from "../types";
 import { auth, isConfigured as googleConfigured } from "./google";
+import { cred } from "@/lib/credentials";
 
 const RANGE = "A1:Z1000";
 
 function missingEnv(): string[] {
   const missing: string[] = [];
   if (!googleConfigured()) missing.push("GOOGLE_CLIENT_ID/SECRET/REFRESH_TOKEN");
-  if (!process.env.CRM_SHEET_ID) missing.push("CRM_SHEET_ID");
+  if (!cred("CRM_SHEET_ID")) missing.push("CRM_SHEET_ID");
   return missing;
 }
 
@@ -38,7 +39,7 @@ function sheetName(): string {
 export async function getPipeline(): Promise<Report> {
   const api = sheets();
   const res = await api.spreadsheets.values.get({
-    spreadsheetId: process.env.CRM_SHEET_ID!,
+    spreadsheetId: cred("CRM_SHEET_ID")!,
     range: `${sheetName()}!${RANGE}`,
   });
   const rows = res.data.values ?? [];
@@ -83,7 +84,7 @@ export async function getPipeline(): Promise<Report> {
 /** Appends a lead row. Values are matched to the sheet's existing header order. */
 export async function addLead(payload: Record<string, string>): Promise<string> {
   const api = sheets();
-  const spreadsheetId = process.env.CRM_SHEET_ID!;
+  const spreadsheetId = cred("CRM_SHEET_ID")!;
   const headerRes = await api.spreadsheets.values.get({
     spreadsheetId,
     range: `${sheetName()}!1:1`,
@@ -108,7 +109,7 @@ export async function addLead(payload: Record<string, string>): Promise<string> 
 /** Updates the stage of the first lead whose name matches. */
 export async function updateLeadStage(payload: { name: string; stage: string }): Promise<string> {
   const api = sheets();
-  const spreadsheetId = process.env.CRM_SHEET_ID!;
+  const spreadsheetId = cred("CRM_SHEET_ID")!;
   const res = await api.spreadsheets.values.get({ spreadsheetId, range: `${sheetName()}!${RANGE}` });
   const rows = res.data.values ?? [];
   if (!rows.length) throw new Error("The CRM sheet is empty.");

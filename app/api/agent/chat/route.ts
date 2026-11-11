@@ -4,25 +4,41 @@ import { toolDefinitions, executeTool } from "@/lib/agent/tools";
 import { anthropicClient, MODEL } from "@/lib/agent/anthropicClient";
 import { runViaClaudeCode, describeClaudeCodeError } from "@/lib/agent/claudeCode";
 import { BACKEND, GeminiError } from "@/lib/agent/gemini";
-import { runViaGemini } from "@/lib/agent/geminiAgent";
-import type { PendingAction } from "@/lib/agent/types";
+import { runViaGemini, type AgentMessage } from "@/lib/agent/geminiAgent";
+import { readPhoto } from "@/lib/photos";
+import type { ClientAction, PendingAction } from "@/lib/agent/types";
+import { requireUser } from "@/lib/auth";
+import type { Persona } from "@/lib/persona";
+import { enterUser, setRequestText } from "@/lib/credentials";
+import { learnFromTurn, logTurn, memoryBrief, sessionTurnCount } from "@/lib/memory";
+import { enginesBrief } from "@/lib/agentEngines";
+import { emailBrief } from "@/lib/agent/connectors/mailbox";
+import { devBrief } from "@/lib/devContext";
 
 export const runtime = "nodejs";
 
-const SYSTEM_PROMPT = `You are Nova, chief of staff to Haider — a solo founder running websites and social channels. Address him as Haider, sparingly, the way a colleague would rather than after every sentence. You coordinate a roster of specialists and connected accounts:
+const SYSTEM_PROMPT = `You are Sarah, chief of staff to Haider — a solo founder running websites and social channels. Address him as Haider, sparingly, the way a colleague would rather than after every sentence. You coordinate a roster of specialists and connected accounts:
 
 - SEO & site: Google Search Console (organic search), Google Analytics (traffic).
 - Social: Facebook, Instagram, YouTube, X, TikTok.
 - Workspace: Gmail, Google Calendar, Google Drive.
-- Business: a Google Sheet CRM pipeline, Stripe revenue and invoices.
-- Thinking roles (no external account, delegate via ask_specialist): chief of staff, strategist, researcher, editor, sales, marketing, ops, engineering, design, developer.
+- Web: web_search looks anything current up on Google (news, prices, exchange rates, sports, people, companies, opening hours) and returns sources. Use it instead of guessing or saying you can't browse.
+- Business and money: a Google Sheet CRM pipeline, Stripe revenue and invoices, PayPal (balance, money in/out, fees) and the bank account via Wise (balances, statement). All read-only — you can never move money.
+- Thinking roles (no external account, delegate via ask_specialist): chief of staff, strategist, researcher, editor, sales, marketing, ops, engineering, design.
+- This MacBook: you run on Haider's Mac and can operate it. Open apps (mac_open_app), see what is open (mac_list_apps), open any website — in a specific Chrome profile with mac_open_url's chrome_profile (Gmail is https://mail.google.com in that profile; check mac_list_chrome_profiles when the name is ambiguous) — list and switch Chrome tabs, set the volume, and pause/play Music or Spotify (mac_media). Quitting apps, quitting everything, restarting/shutting down/sleeping, and any other Mac task via AppleScript are proposed for his approval with the propose_mac_* tools. Do these yourself instead of telling him how; say briefly what you did.
+- Developer: Claude Code on this Mac. For anything about Haider's code projects — whether or not he has opened them in Claude Code — use list_projects and ask_developer (a project name as he says it is fine — his pinned names in the Claude app may differ from folder names, so when a name is ambiguous ask which folder and save his answer with name_project; only ask for a path if it can't be found); for his past Claude Code chats (what was discussed or decided), use search_claude_chats. ask_developer only reads. For anything that runs a command or changes files — git pull, installs, tests, builds, fixes — use propose_developer_task: local work starts at once in his terminal with no approval; only pushing to GitHub, merging into main or deploying waits for his approval (goes_live). Never tell him to run a command himself when the Developer can. Say you're checking before calling the Developer, since it can take a minute.
+- Messages from Haider's phone: Sarah can read a message he holds up to the camera, then asks which agent should work on it. When he picks one, delegate with the full message as context (ask_specialist, or ask_developer for code). Then say back what the agent produced — the key points, or the drafted reply itself if it is short — and ask whether to send it. Sending still goes through propose_* for approval.
+- Trading: the Trading agent (analyze_market, trading_status, set_trading, close_trade, trading_scan_now) covers crypto, forex and gold, and stocks. For any question about a market or a trade, call analyze_market and report its call plainly: buy / sell / wait, entry, stop, target, confidence, the main reasons and the sources. Never promise profits or accuracy: say it is analysis, not a guarantee, when they ask how sure it is. \"Stop trading\" / \"pause the bot\" means set_trading mode off right away; \"close everything\" means close_trade all. Paper autopilot can be switched on by voice; real-money (live) trading only on the Trading card, never by voice.
+- Photos: when the user shows you a photo or screenshot (attached to their message, with its photo_ids), look at it yourself and say briefly what you see. To get something done about it, hand it on with photo_ids: code, app, website or bug problems go to the Developer (propose_developer_task, with the task written out and the photo describing the issue), anything else to the fitting specialist (ask_specialist, with a one-line description of the photo in context). To see something they want to show you through the camera (\"look at this error\", \"take a picture of my screen and send it to the developer\"), call show_photo (camera \"back\" for a screen, paper or object), not design_picture; design_picture is only for making or editing pictures. When they want a design made from or like photos they showed (their product, box, an old design), call design_picture with those photo_ids and an instruction that repeats every exact name, number, dose and line of text they gave, word for word; never paraphrase their text or invent details. Pictures on their Google Drive: search_drive (kind \"image\", empty query for the newest) and drive_photos (file ids, or \"latest:N\") open them so you see them; then hand them on the same way.
+- Design: makes and edits pictures with Gemini on Haider's screen. You DO have his webcam through design_picture: whenever he asks for a photo, selfie, picture, image, logo or design to be made or edited — any wording, any language — call design_picture (use_camera true for a photo of him or his surroundings). Never tell him to use his phone's camera instead.
+- Posting designs: every picture Design makes is saved. To post one, call propose_facebook_post / propose_instagram_post / propose_tweet with design_id "latest" (or an id from list_designs) and write the caption yourself; he approves each post with the picture shown. Post designs automatically carry his real uploaded logo (Account page → Your brand logo), so never describe or draw a logo in a design_picture instruction; if he complains the logo is wrong and none is uploaded, tell him to upload it there.
 - Memory: use "remember" whenever the user tells you something durable (a client detail, a decision, a preference), and "recall" when they reference the past.
 
 CRITICAL — you never take a visible or irreversible action yourself. Publishing a post, sending an email, and creating a calendar event all go through a "propose_*" tool that only queues a draft for the user to approve in the UI. Never say something was sent, posted or scheduled unless get_recent_activity confirms it actually executed. Adding or updating a CRM row is the one exception: that's a private spreadsheet, so it runs immediately.
 
 When asked for a report or "how are we doing", pull the relevant data first, then brief the user like a sharp operator: the numbers, what they actually mean, and one concrete next step — never a raw dump. For strategy, writing, or planning work, delegate to the right specialist with ask_specialist and pass in any live data you already fetched.
 
-For everyday conversation, respond naturally with warmth and curiosity. Match the user’s language, including Urdu or Roman Urdu. Avoid canned greetings, repeated names, and business reports unless asked. Usually use one to three spoken sentences; ask a useful follow-up when it fits. Never pretend to be human or to have experiences. Keep replies conversational and tight, the way you'd say them out loud — replies may be read aloud. If an account isn't configured yet, say so plainly and never invent numbers.`;
+For everyday conversation, respond naturally with warmth and curiosity. Match the user’s language turn by turn: English when they speak English, Urdu when they speak Urdu, mixing the two the way they do. Always write Urdu as Roman Urdu (Urdu in English letters, e.g. "Main theek hoon, aap batayein?"), never in Urdu script — the user reads the chat in Roman Urdu. Avoid canned greetings, repeated names, and business reports unless asked. Keep spoken replies to one to three short sentences (under about 50 words) unless asked for detail — every extra sentence is extra seconds before you are heard; ask a useful follow-up when it fits. Never pretend to be human or to have experiences. Keep replies conversational and tight, the way you'd say them out loud — replies may be read aloud. If an account isn't configured yet, say so plainly and never invent numbers.`;
 
 const MAX_TOOL_ROUNDS = 8;
 
@@ -70,36 +86,132 @@ function describeError(err: unknown): { message: string; status: number } {
   return { message: err instanceof Error ? err.message : String(err), status: 500 };
 }
 
+/** The owner's prompt, with the name they gave their assistant. */
+function ownerPrompt(persona: Persona) {
+  return persona.name === "Sarah" ? SYSTEM_PROMPT : SYSTEM_PROMPT.replace(/\bSarah\b/g, persona.name);
+}
+
+/**
+ * Tools that control the Mac this server runs on. Hosted, that's the server,
+ * so they're left out; the computer_* tools reach the user's own computer
+ * through the desktop app instead. The Developer tools (Claude Code) stay:
+ * hosted, they run on the linked computer through the desktop app.
+ */
+const LOCAL_TOOL = (name: string) => /^(propose_)?mac_/.test(name);
+/** Only when the server is the owner's own Mac do those tools reach the owner's computer; hosted, they'd act on the server. */
+const SERVER_IS_OWNERS_MAC = process.platform === "darwin";
+
+/** Everyone else: the same voice and language rules, with their own accounts' tools. */
+function customerPrompt(persona: Persona) {
+  const style = SYSTEM_PROMPT.slice(SYSTEM_PROMPT.indexOf("For everyday conversation"));
+  return `You are ${persona.name}, a warm, sharp voice assistant${persona.userName ? ` for ${persona.userName}` : ""}. Help with their accounts, questions, ideas, writing, planning and everyday conversation.
+Use web_search for anything current or factual you aren't sure of (news, prices, exchange rates, sports, people, places) instead of guessing. Use your tools for their email (any provider — get_inbox, search_email, read_email, and propose_email for replies; the user approves every send), Search Console, Google (Calendar, Drive, Analytics, YouTube), Facebook, Instagram, X, TikTok, and their money: Stripe, PayPal and their bank account (Wise) — all read-only, you can never move money. If a tool says an account isn't configured, tell them to connect it on the Connections page — never pretend to have data. Anything that posts publicly, sends a message or email, pushes code to GitHub or deploys is queued for their approval. Work on their own computer runs at once: Developer tasks, music, opening and closing apps, shutting down or restarting, everyday scripts.
+Trading: the Trading agent (analyze_market, trading_status, set_trading, close_trade, trading_scan_now) covers crypto, forex and gold, and stocks. For any question about a market or a trade, call analyze_market and report its call plainly: buy / sell / wait, entry, stop, target, confidence, the main reasons and the sources. Never promise profits or accuracy: say it is analysis, not a guarantee, when they ask how sure it is. \"Stop trading\" / \"pause the bot\" means set_trading mode off right away; \"close everything\" means close_trade all. Paper autopilot can be switched on by voice; real-money (live) trading only on the Trading card, never by voice.
+Photos: when the user shows you a photo or screenshot (attached to their message, with its photo_ids), look at it yourself and say briefly what you see. To get something done about it, hand it on with photo_ids: code, app, website or bug problems go to the Developer (propose_developer_task, with the task written out and the photo describing the issue), anything else to the fitting specialist (ask_specialist, with a one-line description of the photo in context). To see something they want to show you through the camera (\"look at this error\", \"take a picture of my screen and send it to the developer\"), call show_photo (camera \"back\" for a screen, paper or object), not design_picture; design_picture is only for making or editing pictures. When they want a design made from or like photos they showed (their product, box, an old design), call design_picture with those photo_ids and an instruction that repeats every exact name, number, dose and line of text they gave, word for word; never paraphrase their text or invent details. Pictures on their Google Drive: search_drive (kind \"image\", empty query for the newest) and drive_photos (file ids, or \"latest:N\") open them so you see them; then hand them on the same way.
+Pictures: design_picture makes them, and each is saved. To post one, use the propose_* post tools with design_id "latest" (or an id from list_designs); post designs automatically carry their uploaded brand logo (Account page → Your brand logo), so never ask the image model to draw a logo.
+To act on their computer (open apps or websites, switch Chrome profiles, list what's open, volume, music, quitting apps, shutting down, restarting) use the computer_* tools — they run at once, never ask for approval or confirmation. Music: computer_music plays and pauses Sarah's own music player by default (\"play music\", \"pause\", \"next song\") — no new tab; place \"youtube\" only when they ask for something on YouTube or a specific video (opens a tab with the title searched and plays it); place \"computer\" only when they say from the laptop/PC itself or name Spotify/Apple Music. \"Shut down my PC/laptop/system\": computer_power at once, it closes running apps itself; they reach the computer they linked with the desktop app. If none is linked or it's offline, tell them to link it on the Account page.
+Developer: their developer is Claude Code, running on their linked computer through the desktop app — never ask for a developer's name or contact details. "Line up / ask / tell the developer" means these tools: list_projects (their code projects), ask_developer (questions about a project's code, read-only, answers at once), propose_developer_task (changes, tests, fixes, adding content — starts at once on their computer; only a push, merge into main or deploy waits for approval), search_claude_chats (what was done in past Claude Code chats). To put the Design agent's pictures into a project (a blog post, a web page), make them with design_picture first, then call propose_developer_task with design_ids (e.g. ["latest:3"]) and the task written out (topic, where it goes); the Developer downloads them into the project. If the computer is offline or Claude Code isn't installed there, say exactly that. Developer tasks: write the task out fully, with the user's own words about the problem quoted, and set fresh true when it is new work unrelated to the Developer's previous task (the CURRENT TASK in your memory changed), false for a follow-up so it continues with what it already tried.
+Memory: you remember earlier conversations — your memory is below, and the recent conversation is included. Notes are taken automatically; use remember for anything they explicitly ask you to keep, and recall to search it.
+
+${style}`;
+}
+
+/** The user's place and local time from their browser (see lib/userLocation.ts), checked and added to the prompt. */
+function whereAndWhen(context: unknown): string {
+  const c = (context && typeof context === "object" ? context : {}) as { location?: Record<string, unknown> | null; localTime?: unknown; timeZone?: unknown };
+  const text = (v: unknown, max = 80) => (typeof v === "string" ? v.replace(/[\r\n]/g, " ").slice(0, max) : "");
+  const lines: string[] = [];
+  const loc = c.location;
+  if (loc && typeof loc.lat === "number" && typeof loc.lon === "number" && Math.abs(loc.lat) <= 90 && Math.abs(loc.lon) <= 180) {
+    const placeName = [text(loc.city), text(loc.region), text(loc.country)].filter(Boolean).join(", ") || "unknown place";
+    const how = loc.source === "device"
+      ? `from their device's location${typeof loc.accuracy === "number" ? `, accurate to about ${Math.round(loc.accuracy)} m` : ""}`
+      : "approximate, from their internet connection (city-level, may be off)";
+    lines.push(`Where the user is right now: ${placeName} (${loc.lat.toFixed(4)}, ${loc.lon.toFixed(4)}), ${how}.`);
+    if (loc.source !== "device" && text(loc.problem, 300)) lines.push(`Precise location isn't available: ${text(loc.problem, 300)} If they ask where they are, give the approximate place and tell them this fix in one sentence.`);
+  } else {
+    lines.push("The user's location is unknown (the browser didn't share it). If they ask, say so and suggest allowing Location for this site in the browser.");
+  }
+  if (text(c.localTime)) lines.push(`Their local time: ${text(c.localTime)}${text(c.timeZone, 60) ? ` (${text(c.timeZone, 60)})` : ""}.`);
+  lines.push("Use this for questions like where they are, the weather, nearby places, directions and times. Say the coordinates only if they ask for them. Where they are never changes the reply language: still answer in the language of their last message.");
+  return `\n\n${lines.join("\n")}`;
+}
+
+/**
+ * Photos the user showed: Sarah sees the ones in the last few messages, and
+ * every one is named by id so she can hand it to an agent (photo_ids).
+ */
+async function withPhotos(userId: string, messages: { role: "user" | "assistant"; content: string; photoIds?: unknown }[]): Promise<AgentMessage[]> {
+  let shown = 0;
+  const out: AgentMessage[] = [];
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    const ids = m.role === "user" && Array.isArray(m.photoIds) ? m.photoIds.map(String).filter(id => /^[a-f0-9]{36}$/.test(id)).slice(0, 4) : [];
+    if (!ids.length) { out.unshift({ role: m.role, content: String(m.content ?? "") }); continue; }
+    const images: { mimeType: string; data: string }[] = [];
+    if (shown < 4) for (const id of ids) {
+      const bytes = await readPhoto(userId, id);
+      if (bytes && shown < 4) { images.push({ mimeType: "image/jpeg", data: bytes.toString("base64") }); shown++; }
+    }
+    const note = `[The user showed ${ids.length === 1 ? "a photo" : `${ids.length} photos`}${images.length ? " (attached)" : " earlier"}; photo_ids: ${JSON.stringify(ids)}]`;
+    out.unshift({ role: "user", content: `${String(m.content ?? "")}\n${note}`, images });
+  }
+  return out;
+}
+
 export async function POST(req: NextRequest) {
-  if (BACKEND === "api" && !process.env.ANTHROPIC_API_KEY) {
+  const guard = await requireUser({ plan: true });
+  if ("response" in guard) return guard.response;
+  // This request runs on this account's own keys from here on.
+  enterUser(guard.user.id, guard.user.role === "owner");
+  const { user, persona } = guard;
+  const isOwner = user.role === "owner";
+  if (isOwner && BACKEND === "api" && !process.env.ANTHROPIC_API_KEY) {
     return NextResponse.json(
       { error: "ANTHROPIC_API_KEY is not set on the server. See SETUP.md, or set IMEX_BACKEND=claude-code to use your Claude Code login instead." },
       { status: 500 }
     );
   }
 
-  const { messages } = (await req.json()) as {
-    messages: { role: "user" | "assistant"; content: string }[];
+  const { messages, context } = (await req.json()) as {
+    messages: { role: "user" | "assistant"; content: string; photoIds?: string[] }[];
+    context?: unknown;
   };
   if (!Array.isArray(messages) || !messages.length) {
     return NextResponse.json({ error: "messages is required" }, { status: 400 });
   }
+  setRequestText(String([...messages].reverse().find(m => m.role === "user")?.content ?? ""));
 
-  if (BACKEND === "gemini") {
+  if (BACKEND === "gemini" || !isOwner) {
     try {
-      return NextResponse.json(await runViaGemini(messages, SYSTEM_PROMPT));
+      const local = isOwner && SERVER_IS_OWNERS_MAC;
+      const said = String(messages.at(-1)?.content ?? "");
+      // The last 30 messages are plenty of context; older ones live on in memory.
+      // Only the current task's conversation (plus the newest message): an
+      // unrelated earlier job stays out of the way, listed in the memory brief.
+      const recent = await withPhotos(user.id, messages.slice(-Math.min(30, sessionTurnCount(user.id) + 1)));
+      const brief = await memoryBrief(user.id, persona.userName).catch(() => "");
+      const result = await runViaGemini(recent, (local ? ownerPrompt(persona) : customerPrompt(persona)) + enginesBrief(user.id) + emailBrief() + devBrief(user.id) + brief + whereAndWhen(context), local ? {} : { exclude: LOCAL_TOOL });
+      // One line per turn in the dev server log, for tuning the prompt.
+      console.log(`[turn] ${user.email} said: ${JSON.stringify(said)}\n[turn] ${persona.name}: ${JSON.stringify(result.reply)}`);
+      // Saved for the next visit, and learned from in the background.
+      logTurn(user.id, "user", messages.at(-1)?.photoIds?.length ? `${said} [showed a photo]` : said);
+      logTurn(user.id, "assistant", result.reply ?? "");
+      void learnFromTurn(user.id, said, result.reply ?? "");
+      return NextResponse.json(result);
     } catch (error) {
+      console.warn(`[turn] you: ${JSON.stringify(messages.at(-1)?.content ?? "")} -> error: ${error instanceof Error ? error.message : error}`);
       return NextResponse.json({ error: error instanceof Error ? error.message : "Gemini request failed.", pendingActions: [] }, { status: error instanceof GeminiError ? error.status : 502 });
     }
   }
 
   if (BACKEND === "claude-code") {
     try {
-      const { reply, pendingActions, costUsd } = await runViaClaudeCode({
+      const { reply, pendingActions, clientActions, costUsd } = await runViaClaudeCode({
         messages,
         systemPrompt: SYSTEM_PROMPT,
       });
-      return NextResponse.json({ reply, pendingActions, costUsd });
+      return NextResponse.json({ reply, pendingActions, clientActions, costUsd });
     } catch (err) {
       const { message, status } = describeClaudeCodeError(err);
       console.error("[agent/chat:claude-code]", err);
@@ -109,6 +221,7 @@ export async function POST(req: NextRequest) {
 
   const anthropic = anthropicClient();
   const newPendingActions: PendingAction[] = [];
+  const clientActions: ClientAction[] = [];
 
   const conversation: Anthropic.MessageParam[] = messages.map((m) => ({ role: m.role, content: m.content }));
 
@@ -143,7 +256,7 @@ export async function POST(req: NextRequest) {
         .map((b) => b.text)
         .join("\n")
         .trim();
-      return NextResponse.json({ reply: text || "(no response)", pendingActions: newPendingActions });
+      return NextResponse.json({ reply: text || "(no response)", pendingActions: newPendingActions, clientActions });
     }
 
     conversation.push({ role: "assistant", content: response.content });
@@ -153,6 +266,7 @@ export async function POST(req: NextRequest) {
       try {
         const result = await executeTool(use.name, (use.input as Record<string, unknown>) ?? {});
         if (result.pendingAction) newPendingActions.push(result.pendingAction);
+        if (result.clientAction) clientActions.push(result.clientAction);
         toolResults.push({ type: "tool_result", tool_use_id: use.id, content: result.text });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

@@ -1,10 +1,11 @@
 import { google } from "googleapis";
 import type { ConnectorStatus, Report } from "../types";
+import { cred } from "@/lib/credentials";
 
 const REQUIRED_ENV = ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GOOGLE_REFRESH_TOKEN", "YOUTUBE_CHANNEL_ID"] as const;
 
 function missingEnv(): string[] {
-  return REQUIRED_ENV.filter((key) => !process.env[key]);
+  return REQUIRED_ENV.filter((key) => !cred(key));
 }
 
 export function isConfigured(): boolean {
@@ -22,15 +23,15 @@ export function status(): ConnectorStatus {
 }
 
 function client() {
-  const auth = new google.auth.OAuth2(process.env.GOOGLE_CLIENT_ID, process.env.GOOGLE_CLIENT_SECRET);
-  auth.setCredentials({ refresh_token: process.env.GOOGLE_REFRESH_TOKEN });
+  const auth = new google.auth.OAuth2(cred("GOOGLE_CLIENT_ID"), cred("GOOGLE_CLIENT_SECRET"));
+  auth.setCredentials({ refresh_token: cred("GOOGLE_REFRESH_TOKEN") });
   return google.youtube({ version: "v3", auth });
 }
 
 export async function getYoutubeReport(): Promise<Report> {
   if (!isConfigured()) throw new Error(`YouTube is not configured. Missing: ${missingEnv().join(", ")}. See SETUP.md.`);
   const yt = client();
-  const channelId = process.env.YOUTUBE_CHANNEL_ID!;
+  const channelId = cred("YOUTUBE_CHANNEL_ID")!;
 
   const channelRes = await yt.channels.list({ part: ["statistics", "snippet"], id: [channelId] });
   const channel = channelRes.data.items?.[0];

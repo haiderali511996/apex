@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Audition and choose the voice Nova speaks with. macOS ships ~200 voices
+ * Audition and choose the voice Sarah speaks with. macOS ships ~200 voices
  * across every language, so this lists the English ones only, plays a sample
  * on demand, and remembers the choice in localStorage.
  */
@@ -22,7 +22,7 @@ export default function VoicePicker({ onClose }: { onClose: () => void }) {
 
   useEffect(() => {
     void fetch("/api/tts").then(r => r.json()).then(config => {
-      if (config.enabled) setServiceVoice(`${config.provider === "gemini" ? "Gemini" : "ElevenLabs"} · ${config.configuredVoiceId || "configured voice"}`);
+      if (config.enabled) setServiceVoice(`${config.provider === "gemini" ? "Gemini" : config.provider === "fish" ? "Fish Audio" : "ElevenLabs"} · ${config.configuredVoiceId || "configured voice"}`);
     }).catch(() => {});
     const load = () => {
       setVoices(englishVoices());
@@ -63,7 +63,7 @@ export default function VoicePicker({ onClose }: { onClose: () => void }) {
   return (
     <div
       role="dialog"
-      aria-label="Choose Nova's voice"
+      aria-label="Choose Sarah's voice"
       style={{
         position: "absolute", top: 190, right: "clamp(16px,3vw,40px)", zIndex: 70,
         width: "min(380px, 88vw)", maxHeight: "min(460px, 66vh)", display: "flex", flexDirection: "column",
@@ -74,7 +74,7 @@ export default function VoicePicker({ onClose }: { onClose: () => void }) {
     >
       <div style={{ display: "flex", alignItems: "center", padding: "13px 15px", borderBottom: `1px solid ${ACCENT}22` }}>
         <div>
-          <div style={{ fontFamily: "var(--font-mono)", fontSize: 10, letterSpacing: "0.24em", color: ACCENT }}>NOVA VOICE</div>
+          <div style={{ fontFamily: "var(--font-mono)", fontSize: 10, letterSpacing: "0.24em", color: ACCENT }}>SARAH VOICE</div>
           <div style={{ fontSize: 10.5, color: "rgba(240,237,232,0.4)", marginTop: 3 }}>
             {serviceVoice || `${voices.length} English voices — tap to hear`}
           </div>
@@ -94,7 +94,7 @@ export default function VoicePicker({ onClose }: { onClose: () => void }) {
             No voices reported yet — reload the page and reopen this panel.
           </div>
         )}
-        {serviceVoice && <div style={{ padding: 14, fontSize: 13, lineHeight: 1.6 }}>Nova uses {serviceVoice}. Press Test Sound below to hear it. System voices are used only if speech generation fails.</div>}
+        {serviceVoice && <div style={{ padding: 14, fontSize: 13, lineHeight: 1.6 }}>Sarah uses {serviceVoice}. Press Test Sound below to hear it. System voices are used only if speech generation fails.</div>}
         {!serviceVoice && voices.map((voice) => {
           const isSelected = voice.name === selected;
           return (
@@ -133,7 +133,7 @@ export default function VoicePicker({ onClose }: { onClose: () => void }) {
             setStatus({ kind: "playing", text: "Preparing a sound check…" });
             speakText("Sound check. If you can hear this, audio is working.", null, {
               onStart: () => { if (!warning) setStatus({ kind: "playing", text: "Playing…" }); },
-              onEnd: () => setStatus(warning ? { kind: "error", text: warning } : { kind: "ok", text: "Sound works. Nova is ready to speak." }),
+              onEnd: () => setStatus(warning ? { kind: "error", text: warning } : { kind: "ok", text: "Sound works. Sarah is ready to speak." }),
               onWarning: reason => { warning = reason; setStatus({ kind: "error", text: reason }); },
               onError: (reason) =>
                 setStatus({
