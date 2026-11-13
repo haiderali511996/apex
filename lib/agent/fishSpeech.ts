@@ -11,13 +11,18 @@ import { isRomanUrdu, isUrdu, type SpeechLang } from "@/lib/speechLanguage";
 
 export { isRomanUrdu, isUrdu };
 
+/** Western, Arabic-Indic and Urdu (Extended Arabic-Indic) digits. */
+const DIGITS = /[0-9\u0660-\u0669\u06F0-\u06F9]/;
+
 /**
  * Roman Urdu spelling doesn't say how a word sounds, so even a native voice
  * stumbles over it. The chat shows Roman Urdu; only the voice gets Urdu script.
+ * Digits are spelled out too: in Urdu script (shared with Arabic) the voice
+ * read them as Arabic numbers.
  */
 async function toUrduScript(text: string) {
   const content = await generateGemini(
-    'Transliterate the user\'s Roman Urdu into Urdu script so it can be read aloud. Write English words the way an Urdu speaker would write them in Urdu script. Keep the meaning and wording exactly; do not translate, add or drop anything. Reply with the Urdu text only.',
+    'Rewrite the user\'s text in Urdu script so an Urdu voice can read it aloud. Roman Urdu becomes Urdu script; text already in Urdu script stays as it is. Write English words the way an Urdu speaker would write them in Urdu script. Write every number out in Urdu words, the way it is said in Urdu: counts, prices, percentages, times, dates and years (25 → پچیس, 3:30 → ساڑھے تین, 2026 → دو ہزار چھبیس, 50% → پچاس فیصد, Rs 1,500 → پندرہ سو روپے); phone numbers and codes digit by digit in Urdu words. No digits may remain. Keep the meaning and wording exactly; do not translate, add or drop anything. Reply with the Urdu text only.',
     [{ role: 'user', parts: [{ text }] }],
   );
   return geminiText(content);
@@ -38,11 +43,13 @@ export async function generateFishSpeech(text: string, signal?: AbortSignal, gen
   const { en, ur: urduVoice } = voices(gender);
   let voiceId = en;
   const urdu = lang ? lang === 'ur' : isUrdu(text) || isRomanUrdu(text);
-  if (urduVoice && urdu && isUrdu(text)) voiceId = urduVoice;
-  else if (urduVoice && urdu) {
+  if (urduVoice && urdu) {
     voiceId = urduVoice;
-    // If the conversion fails, the Urdu voice still reads the Roman text.
-    try { text = (await toUrduScript(text)) || text; } catch (err) { console.warn('[tts] Urdu transliteration failed:', err instanceof Error ? err.message : err); }
+    // Roman Urdu needs Urdu script, and numbers in either need Urdu words.
+    // If the conversion fails, the Urdu voice still reads the text as it was.
+    if (!isUrdu(text) || DIGITS.test(text)) {
+      try { text = (await toUrduScript(text)) || text; } catch (err) { console.warn('[tts] Urdu transliteration failed:', err instanceof Error ? err.message : err); }
+    }
   }
   const response = await fetch('https://api.fish.audio/v1/tts', {
     method: 'POST',

@@ -19,8 +19,8 @@ const DEFAULT_TRACKS = [
   "tunetank-inspiring-innovation-347767.mp3",
 ].map(name => `/${encodeURIComponent(name)}`);
 
-const VOLUME = 0.12; // soft, so it sits under Sarah's voice
-const LISTEN_VOLUME = 0.6; // "play music": out loud, to listen to
+const VOLUME = 0.24; // background: under Sarah's voice, but clearly heard
+const LISTEN_VOLUME = 1; // "play music": out loud, to listen to (the browser's maximum)
 const DUCK_VOLUME = 0.06; // while Sarah thinks and speaks in listening mode
 
 /** A readable name for a track URL: the file name without the store id or extension. */

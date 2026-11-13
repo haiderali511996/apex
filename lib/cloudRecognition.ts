@@ -36,8 +36,8 @@ type Callbacks = {
 export type CloudMode = InputMode | "barge";
 
 const RATE = 16000;
-/** Quiet this long after speaking ends the turn; short pauses to think don't. */
-const END_SILENCE_MS = 650;
+/** Quiet this long after speaking ends the turn; pauses to think mid-sentence do not (650 ms cut people off). */
+const END_SILENCE_MS = 1000;
 /** Audio kept from just before the voice was detected. */
 const PRE_ROLL_MS = 400;
 /** Sustained voice needed to count as speech rather than a click or a cough. */
