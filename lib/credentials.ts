@@ -241,11 +241,16 @@ export function sharedGoogleApp(): { id: string; secret: string } | null {
 
 /**
  * True when this request's Google sign-in goes through the platform's app.
- * An account that saved its own OAuth client keeps using it: a Google token
- * only works with the app that issued it.
+ * An account that saved its own OAuth client on the Connections page keeps
+ * using it: a Google token only works with the app that issued it. The
+ * owner's GOOGLE_CLIENT_ID in the server's .env does not count: on the hosted
+ * site that was an older app without this domain registered, and it sent the
+ * owner to Google's "redirect_uri_mismatch" page.
  */
 export function usingSharedGoogle(): boolean {
-  return !!sharedGoogleApp() && !(ownCred("GOOGLE_CLIENT_ID") && ownCred("GOOGLE_CLIENT_SECRET"));
+  if (!sharedGoogleApp()) return false;
+  const saved = (key: string) => { const v = context.getStore()?.values[key]; return !!v && v !== SIGNED_OUT; };
+  return !(saved("GOOGLE_CLIENT_ID") && saved("GOOGLE_CLIENT_SECRET"));
 }
 
 export function cred(key: string): string | undefined {
