@@ -228,7 +228,36 @@ export function isOwnerRequest(): boolean {
  * server's .env.local. With no account entered it returns nothing — failing
  * closed, so a missed route can never fall back to the owner's keys.
  */
+/**
+ * The platform's own Google app (SHARED_GOOGLE_CLIENT_ID / _SECRET in the
+ * server's env). With it, customers connect Google with one button and never
+ * see a client ID or secret. It is the app's identity, not anyone's data:
+ * each customer still signs in and gets their own token.
+ */
+export function sharedGoogleApp(): { id: string; secret: string } | null {
+  const id = process.env.SHARED_GOOGLE_CLIENT_ID?.trim(), secret = process.env.SHARED_GOOGLE_CLIENT_SECRET?.trim();
+  return id && secret ? { id, secret } : null;
+}
+
+/**
+ * True when this request's Google sign-in goes through the platform's app.
+ * An account that saved its own OAuth client keeps using it: a Google token
+ * only works with the app that issued it.
+ */
+export function usingSharedGoogle(): boolean {
+  return !!sharedGoogleApp() && !(ownCred("GOOGLE_CLIENT_ID") && ownCred("GOOGLE_CLIENT_SECRET"));
+}
+
 export function cred(key: string): string | undefined {
+  if ((key === "GOOGLE_CLIENT_ID" || key === "GOOGLE_CLIENT_SECRET") && usingSharedGoogle()) {
+    const app = sharedGoogleApp()!;
+    return key === "GOOGLE_CLIENT_ID" ? app.id : app.secret;
+  }
+  return ownCred(key);
+}
+
+/** The account's own value (the owner's falls back to the server's .env). */
+function ownCred(key: string): string | undefined {
   const ctx = context.getStore();
   if (!ctx) return undefined;
   const own = ctx.values[key];

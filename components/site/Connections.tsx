@@ -6,7 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { Group } from "@/lib/credentials";
 
 type FieldState = { set: boolean; source: "account" | "server" | null; display: string };
-type Data = { groups: Group[]; fields: Record<string, FieldState>; googleSignedIn: boolean; connected?: Record<string, boolean>; owner: boolean };
+type Data = { groups: Group[]; fields: Record<string, FieldState>; googleSignedIn: boolean; connected?: Record<string, boolean>; owner: boolean; sharedGoogle?: boolean };
 
 /** Every key the assistant runs on, entered once per account and stored encrypted. */
 export default function Connections() {
@@ -85,18 +85,35 @@ export default function Connections() {
 
       <div style={{ display: "grid", gap: 16 }}>
         <EmailAccounts />
-        {data.groups.map(group => (
+        {data.groups.map(group => {
+          // One-button Google: the platform's app signs the customer in, so
+          // there is no client ID or secret to paste, only optional details.
+          const oneClick = group.id === "google" && !!data.sharedGoogle;
+          const shownFields = oneClick ? group.fields.filter(f => f.key !== "GOOGLE_CLIENT_ID" && f.key !== "GOOGLE_CLIENT_SECRET") : group.fields;
+          return (
           <section className="card" key={group.id} style={{ padding: 24 }}>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "baseline" }}>
               <h3 style={{ fontSize: 18 }}>
                 {group.title} {group.required && <span className="plan-badge" style={{ marginLeft: 8, verticalAlign: "middle" }}>Required</span>}
                 <span style={{ marginLeft: 10, fontSize: 13, fontWeight: 500, color: data.connected?.[group.id] ? "var(--ok, #2fbf71)" : "var(--muted)" }}>{data.connected?.[group.id] ? "● Connected" : "○ Not connected"}</span>
               </h3>
-              {group.link && <a href={group.link.href} target="_blank" rel="noreferrer" style={{ color: "var(--accent)", fontSize: 14 }}>{group.link.text} ↗</a>}
+              {group.link && !oneClick && <a href={group.link.href} target="_blank" rel="noreferrer" style={{ color: "var(--accent)", fontSize: 14 }}>{group.link.text} ↗</a>}
             </div>
-            <p style={{ margin: "6px 0 16px" }}>{group.why}</p>
+            <p style={{ margin: "6px 0 16px" }}>{oneClick ? "Press the button and sign in with your Google account: Gmail, Calendar and Drive connect at once. No keys to copy." : group.why}</p>
+            {oneClick && (
+              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 16 }}>
+                {data.googleSignedIn
+                  ? <>
+                      <span className="form-ok" style={{ margin: 0 }}>Signed in with Google</span>
+                      <a className="btn btn-ghost btn-small" href="/api/google/connect" title="Sign in again: fixes an expired connection and grants any new permissions">Reconnect Google</a>
+                      <button type="button" className="btn btn-ghost btn-small" disabled={busy === group.id} onClick={() => disconnect(group)}>Sign out</button>
+                    </>
+                  : <a className="btn btn-primary" href="/api/google/connect">Connect Google</a>}
+              </div>
+            )}
+            {oneClick && <p style={{ margin: "0 0 8px", fontSize: 13, color: "var(--muted)" }}>Optional, for reports on your own site and channel:</p>}
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "4px 16px" }}>
-              {group.fields.map(f => {
+              {shownFields.map(f => {
                 const state = data.fields[f.key];
                 return (
                   <label className="field" key={f.key}>
@@ -109,13 +126,13 @@ export default function Connections() {
                 );
               })}
             </div>
-            {group.id === "google" && (
+            {group.id === "google" && !oneClick && (
               <p style={{ fontSize: 13 }}>In your OAuth client, add this authorized redirect URI: <code style={{ color: "var(--text)" }}>{origin}/api/google/callback</code></p>
             )}
             <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginTop: 8 }}>
               <button type="button" className="btn btn-primary btn-small" disabled={busy === group.id} onClick={() => save(group)}>{busy === group.id ? "Saving…" : "Save"}</button>
               {(group.id === "gemini" || group.id === "fish") && <button type="button" className="btn btn-ghost btn-small" disabled={busy === group.id} onClick={() => test(group.id)}>Test</button>}
-              {group.id === "google" && (data.googleSignedIn
+              {group.id === "google" && !oneClick && (data.googleSignedIn
                 ? <>
                     <span className="form-ok" style={{ margin: 0 }}>Signed in with Google</span>
                     <a className="btn btn-ghost btn-small" href="/api/google/connect" title="Sign in again: fixes an expired connection and grants any new permissions">Reconnect Google</a>
@@ -128,7 +145,8 @@ export default function Connections() {
               {notes[group.id] && <span className={notes[group.id].ok ? "form-ok" : "form-error"} style={{ margin: 0 }}>{notes[group.id].text}</span>}
             </div>
           </section>
-        ))}
+          );
+        })}
       </div>
 
       <div style={{ display: "flex", gap: 12, marginTop: 28, flexWrap: "wrap" }}>

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
-import { enterUser, cred, CREDENTIAL_KEYS, GROUPS, loadCredentials, saveCredentials, SIGNED_OUT } from "@/lib/credentials";
+import { enterUser, cred, CREDENTIAL_KEYS, GROUPS, loadCredentials, saveCredentials, SIGNED_OUT, usingSharedGoogle } from "@/lib/credentials";
 
 export const runtime = "nodejs";
 
@@ -14,7 +14,11 @@ export async function GET() {
   enterUser(guard.user.id, guard.user.role === "owner");
   const own = loadCredentials(guard.user.id), owner = guard.user.role === "owner";
   const fields: Record<string, { set: boolean; source: "account" | "server" | null; display: string }> = {};
+  // Google through the platform's app: its client ID and secret are the
+  // platform's, never shown to or asked from a customer.
+  const sharedGoogle = usingSharedGoogle();
   for (const group of GROUPS) for (const f of group.fields) {
+    if (sharedGoogle && (f.key === "GOOGLE_CLIENT_ID" || f.key === "GOOGLE_CLIENT_SECRET")) { fields[f.key] = { set: false, source: null, display: "" }; continue; }
     const value = cred(f.key);
     fields[f.key] = {
       set: !!value,
@@ -27,9 +31,10 @@ export async function GET() {
   const connected: Record<string, boolean> = {};
   for (const group of GROUPS) {
     const needed = group.fields.filter(f => !f.optional);
-    connected[group.id] = (needed.length ? needed : group.fields).every(f => fields[f.key]?.set) && (group.id !== "google" || googleSignedIn);
+    connected[group.id] = group.id === "google" && sharedGoogle ? googleSignedIn
+      : (needed.length ? needed : group.fields).every(f => fields[f.key]?.set) && (group.id !== "google" || googleSignedIn);
   }
-  return NextResponse.json({ groups: GROUPS, fields, googleSignedIn, connected, owner });
+  return NextResponse.json({ groups: GROUPS, fields, googleSignedIn, connected, owner, sharedGoogle });
 }
 
 /** Saves typed-in keys; an empty value removes one. */
