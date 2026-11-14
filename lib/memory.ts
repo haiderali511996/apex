@@ -261,14 +261,14 @@ export async function memoryBrief(userId: string, name: string): Promise<string>
     const items = facts.filter(f => f.category === c);
     return items.length ? `${CATEGORY_TITLES[c]}:\n${items.map(f => `- ${f.fact} (${f.updatedAt.slice(0, 10)})`).join("\n")}` : "";
   }).filter(Boolean);
-  return `\n\nYOUR MEMORY — what you already know about ${name || "them"} from earlier conversations (newest first; dates are when last confirmed). Use it without being asked, never ask them for something listed here, follow every rule they gave you, and if they correct something, believe them:\n${groups.join("\n\n")}${sessionBrief(userId)}`;
+  return `\n\nYOUR MEMORY — what you already know about ${name || "them"} from earlier conversations (newest first; dates are when last confirmed). Use it without being asked, never ask them for something listed here, follow every rule they gave you, and if they correct something, believe them. Memory is not where you learn what is connected: for which accounts, inboxes and services are connected right now, go by the live lists in this prompt and by what the tools answer, even where a note below disagrees:\n${groups.join("\n\n")}${sessionBrief(userId)}`;
 }
 
 // ---------- Learning from each exchange ----------
 
 const LEARN = `You maintain the long-term memory of a personal voice assistant. You get the memory as it is and the latest exchange.
-Decide what from the exchange is worth remembering for future conversations: facts about the user and their business, projects and what they are, accounts/services/computers connected or not, decisions, rules and preferences they state ("always use my logo", "reply in English"), designs, logos and files (and where they are, e.g. a Google Drive folder), people and companies, open tasks, and a one-line note of meaningful work done (e.g. "Made an Instagram post design for UNC Exchange KYC, 7 Nov").
-Skip small talk, greetings, questions that were simply answered, the weather, and anything temporary. Never store passwords, API keys, tokens or card numbers.
+Decide what from the exchange is worth remembering for future conversations: facts about the user and their business, projects and what they are, decisions, rules and preferences they state ("always use my logo", "reply in English"), designs, logos and files (and where they are, e.g. a Google Drive folder), people and companies, open tasks, and a one-line note of meaningful work done (e.g. "Made an Instagram post design for UNC Exchange KYC, 7 Nov").
+Skip small talk, greetings, questions that were simply answered, the weather, and anything temporary. Never store which accounts, inboxes, services or computers are connected, signed in, missing or failing: that changes on the Connections page and the assistant is told the live state every time, so a remembered copy only goes stale. Remove any existing fact of that kind. Never store passwords, API keys, tokens or card numbers.
 If a new fact replaces or corrects an existing one, update that one instead of adding a duplicate. Remove facts the user says are wrong or no longer true.
 Write each fact as one short, self-contained sentence in English, naming things specifically.
 Categories: ${CATEGORIES.join(", ")}.

@@ -191,7 +191,7 @@ export async function POST(req: NextRequest) {
       // unrelated earlier job stays out of the way, listed in the memory brief.
       const recent = await withPhotos(user.id, messages.slice(-Math.min(30, sessionTurnCount(user.id) + 1)));
       const brief = await memoryBrief(user.id, persona.userName).catch(() => "");
-      const result = await runViaGemini(recent, (local ? ownerPrompt(persona) : customerPrompt(persona)) + enginesBrief(user.id) + emailBrief() + devBrief(user.id) + brief + whereAndWhen(context), local ? {} : { exclude: LOCAL_TOOL });
+      const result = await runViaGemini(recent, (local ? ownerPrompt(persona) : customerPrompt(persona)) + enginesBrief(user.id) + devBrief(user.id) + brief + emailBrief() + whereAndWhen(context), local ? {} : { exclude: LOCAL_TOOL });
       // One line per turn in the dev server log, for tuning the prompt.
       console.log(`[turn] ${user.email} said: ${JSON.stringify(said)}\n[turn] ${persona.name}: ${JSON.stringify(result.reply)}`);
       // Saved for the next visit, and learned from in the background.

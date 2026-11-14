@@ -285,8 +285,15 @@ export async function testMailbox(): Promise<string> {
   return results.join("\n");
 }
 
-/** For the prompt, so the assistant knows which inboxes exist. */
+/**
+ * For the prompt, so the assistant knows which inboxes exist. Read from the
+ * Connections page on every message, so it outranks anything remembered or
+ * said earlier (an inbox added a minute ago is in it; a removed one is not).
+ */
 export function emailBrief(): string {
   const all = addresses();
-  return all.length ? `\n\nConnected email inboxes: ${all.join(", ")}. get_inbox and search_email check all of them unless one is named; reply from the inbox the email came to.` : "";
+  const head = "\n\nCONNECTED EMAIL INBOXES — the live list from the Connections page at this moment. It is the truth: when your memory or an earlier message says otherwise (\"only one inbox is connected\", \"that one couldn't be connected\"), that is out of date, so go by this list and never tell the user an inbox on it is missing.";
+  return all.length
+    ? `${head}\n${all.map(a => `- ${a}`).join("\n")}\nget_inbox and search_email check all of them unless one is named; reply from the inbox the email came to. If one of them fails when you use it, the tool's answer names that inbox and the reason: pass that on as it is.`
+    : `${head}\n(none)`;
 }
