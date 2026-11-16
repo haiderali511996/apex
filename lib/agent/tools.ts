@@ -38,7 +38,7 @@ import { searchWeb } from "./gemini";
 export const toolDefinitions: Anthropic.Tool[] = [
   {
     name: "get_connector_status",
-    description: "List every connected platform (Search Console, Facebook, Instagram, YouTube, X, TikTok) and whether it's configured with working credentials.",
+    description: "List everything that can be connected and whether it is: each email inbox (any provider, one line per address), Gmail, Calendar, Drive, Search Console, Facebook, Instagram, YouTube, X, TikTok, Analytics and the money accounts. Call it whenever the user asks what is connected.",
     input_schema: { type: "object", properties: {} },
   },
   {
