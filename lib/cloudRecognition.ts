@@ -104,6 +104,13 @@ export class CloudRecognition {
   private userLevel = 0;
   private userTurns = 0;
   private dropped = 0;
+  // The turn being transcribed, kept until its words are back: if the user
+  // carries on talking meanwhile, they hadn't finished, and it grows instead.
+  private pending: { chunks: Int16Array[]; voiced: number; levelSum: number; peak: number } | null = null;
+  /** Everything heard since that turn was sent. */
+  private gap: Int16Array[] = [];
+  /** Bumped when a turn in flight is taken back, so its transcript is dropped. */
+  private attempt = 0;
 
   constructor(private callbacks: Callbacks) {
     try {
@@ -132,6 +139,7 @@ export class CloudRecognition {
     this.mode = mode;
     this.resetTurn();
     this.sending = false;
+    this.pending = null; this.gap = [];
     if (!mode) {
       if (!this.keepAlive) this.close();
       this.callbacks.status("off");
@@ -215,13 +223,14 @@ export class CloudRecognition {
 
   private skipTurn(message: string) {
     this.sending = false;
+    this.pending = null; this.gap = [];
     if (this.mode === "barge") this.callbacks.bargeOff?.();
     this.callbacks.interim("");
     this.callbacks.warning?.(message);
   }
 
   private onAudio(input: Float32Array, sampleRate: number) {
-    if (!this.mode || this.sending || this.disposed) return;
+    if (!this.mode || this.disposed) return;
     const pcm = downsample(input, sampleRate);
     let sum = 0;
     for (let i = 0; i < input.length; i++) sum += input[i] * input[i];
@@ -240,6 +249,27 @@ export class CloudRecognition {
     if (loud && (this.speaking || near)) { this.voicedRun += ms; this.silentRun = 0; } else { this.voicedRun = 0; if (this.speaking) this.silentRun += ms; }
 
     if (!this.speaking) {
+      if (this.sending) {
+        // A turn is being transcribed. All of what follows is kept, so if the
+        // user goes on (they only paused to think), nothing between is lost.
+        this.gap.push(pcm);
+        if (this.voicedRun < START_MS) return;
+        const held = this.pending;
+        if (!held || (held.chunks.length + this.gap.length) * ms >= MAX_TURN_MS) return;
+        // They hadn't finished: take that turn back and carry on with it.
+        this.attempt++;
+        this.sending = false;
+        this.speaking = true;
+        this.chunks = [...held.chunks, ...this.gap];
+        this.turnMs = this.chunks.length * ms;
+        this.voicedTotal = held.voiced + this.voicedRun;
+        this.levelSum = held.levelSum + level * this.voicedRun;
+        this.peak = Math.max(held.peak, level);
+        this.pending = null; this.gap = []; this.preRoll = [];
+        this.callbacks.interim("");
+        this.callbacks.speech?.();
+        return;
+      }
       this.preRoll.push(pcm);
       while (this.preRoll.length > 1 && this.preRoll.length * ms > PRE_ROLL_MS) this.preRoll.shift();
       if (this.voicedRun < (barge ? BARGE_START_MS : START_MS)) return;
@@ -260,8 +290,8 @@ export class CloudRecognition {
   }
 
   private endTurn() {
-    const chunks = this.chunks, voiced = this.voicedTotal;
-    const level = voiced ? this.levelSum / voiced : 0;
+    const chunks = this.chunks, voiced = this.voicedTotal, levelSum = this.levelSum, peak = this.peak;
+    const level = voiced ? levelSum / voiced : 0;
     this.resetTurn();
     const nothing = () => { if (this.mode === "barge") this.callbacks.bargeOff?.(); };
     if (voiced < MIN_VOICE_MS) return nothing();
@@ -276,18 +306,22 @@ export class CloudRecognition {
     const pcm = new Int16Array(length);
     let at = 0;
     for (const c of chunks) { pcm.set(c, at); at += c.length; }
+    this.pending = { chunks, voiced, levelSum, peak };
+    this.gap = [];
     void this.transcribe(pcm, level);
   }
 
   private async transcribe(pcm: Int16Array, level: number) {
-    const generation = this.generation, mode = this.mode;
+    const generation = this.generation, mode = this.mode, attempt = ++this.attempt;
+    // Still this turn, not one the user went on talking past.
+    const stale = () => generation !== this.generation || attempt !== this.attempt || this.disposed;
     this.sending = true;
     this.callbacks.interim("…");
     let text = "";
     try {
       const res = await fetch("/api/agent/transcribe", { method: "POST", headers: { "content-type": "application/octet-stream" }, body: pcm.buffer as ArrayBuffer });
       const body = (await res.json().catch(() => ({}))) as { text?: string; error?: string };
-      if (generation !== this.generation || this.disposed) return;
+      if (stale()) return;
       if (!res.ok) {
         const message = body.error || `Transcription failed (HTTP ${res.status}).`;
         // A missing or rejected key won't fix itself: stop. A network blip or
@@ -298,11 +332,12 @@ export class CloudRecognition {
       }
       text = (body.text || "").trim();
     } catch {
-      if (generation !== this.generation || this.disposed) return;
+      if (stale()) return;
       this.skipTurn("Couldn't reach the server to transcribe. Say that again.");
       return;
     }
     this.sending = false;
+    this.pending = null; this.gap = [];
     if (!text || !mode) { this.callbacks.interim(""); if (mode === "barge") this.callbacks.bargeOff?.(); return; }
     const command = mode === "wake" ? matchWake(text) : matchWake(text) ?? text;
     // Without the wake phrase there is nothing to act on; keep listening.

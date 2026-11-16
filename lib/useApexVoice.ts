@@ -344,8 +344,14 @@ export function useApexVoice(options: {
       if (stateRef.current === "thinking" && !interrupt) return;
       // Attached photos go with this message, whether it was typed or spoken.
       const photos = withPhotos ?? attachedRef.current;
-      const trimmed = text.trim() || (photos.length ? "Here's a photo — take a look." : "");
+      let trimmed = text.trim() || (photos.length ? "Here's a photo — take a look." : "");
       if (!trimmed) return;
+      // Spoken while Sarah was still thinking about the last thing said: the
+      // user was finishing that sentence, so the two are one request, not a
+      // half sentence followed by another.
+      const before = messagesRef.current.at(-1);
+      const carriesOn = interrupt && !!text.trim() && before?.role === "user" && !before.photos?.length;
+      if (carriesOn) trimmed = `${before.content} ${trimmed}`;
       if (!withPhotos && photos.length) { attachedRef.current = []; setAttached([]); }
       const turn = ++turnRef.current;
       const current = () => mountedRef.current && turn === turnRef.current;
@@ -356,7 +362,7 @@ export function useApexVoice(options: {
       listenWhileBusy();
       setVoiceState("thinking");
       setHeardText(trimmed);
-      const next: ChatMessage[] = [...messagesRef.current, { role: "user" as const, content: trimmed, ...(photos.length ? { photos } : {}) }];
+      const next: ChatMessage[] = [...(carriesOn ? messagesRef.current.slice(0, -1) : messagesRef.current), { role: "user" as const, content: trimmed, ...(photos.length ? { photos } : {}) }];
       messagesRef.current = next;
       setMessages(next);
       setError(null);
